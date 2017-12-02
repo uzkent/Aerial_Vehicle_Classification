@@ -17,7 +17,7 @@ The goal of our work is detect vehicles on the `WAMI` platform by using convolut
 <img src="./figures/DIRSIG_positives.jpg" alt="DIRSIG_Positives" style="width: 300px;"/>
 
 ### Validation Dataset
-To test the fidelity of the synthetic dataset, we validate the performance of the convolutional network, trained on the synthetic dataset, on the validation dataset containing the real vehicle and background images recorded with the `WAMI` platform. Our validation dataset consists of 600 images from the CLIFF06 and CLIFF07 datasets. Some of the positive images from the validation dataset can be visualized in the figure below.
+To test the fidelity of the synthetic dataset, we validate the performance of the convolutional network, trained on the synthetic dataset, on the validation dataset containing the real vehicle and background images recorded with the `WAMI` platform. Our validation dataset consists of `600` images from the `CLIFF06` and `CLIFF07` datasets. Some of the positive images from the validation dataset can be visualized in the figure below.
 
 <img src="./figures/WAMI_positives.jpg" alt="WAMI_Positives" style="width: 300px;"/>
 
