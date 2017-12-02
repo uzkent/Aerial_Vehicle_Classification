@@ -4,7 +4,7 @@ This repository contains our work on `Aerial Vehicle Detection
 using Synthetic Images`. You can find more details on our work in the
 following paper :
 
-	@inproceedings{uzkent2017tracking,
+	@article{uzkent2017tracking,
 		Title={Tracking in Aerial Hyperspectral Videos using Deep Kernelized Correlation Filters},
 		Author={Uzkent, Burak and Rangnekar, Aneesh and Hoffman, Matthew J},
 		Journal={arXiv preprint arXiv:1711.07235},
@@ -33,7 +33,7 @@ wget https://drive.google.com/open?id=1cQIM2a7gNaxlE2oFdQ_O-GqgBo84fLia
 
 If you use our aerial vehicle detection dataset in your research project, please cite our paper :
 
-	@inproceedings{uzkent2017tracking,
+	@article{uzkent2017tracking,
 		Title={Tracking in Aerial Hyperspectral Videos using Deep Kernelized Correlation Filters},
 		Author={Uzkent, Burak and Rangnekar, Aneesh and Hoffman, Matthew J},
 		Journal={arXiv preprint arXiv:1711.07235},
