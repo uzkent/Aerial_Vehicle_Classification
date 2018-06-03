@@ -40,3 +40,6 @@ If you use our aerial vehicle detection dataset in your research project, please
 		Year={2017}
 	}
 
+### Train ResNet50 Model on the DIRSIG Vehicle Classification Dataset
+
+In this step, the `DIRSIG` dataset is used to train the tensorflow implementation of the `ResNet50` network. To train the model, first download the dataset as explained in the steps above. For the next step, please visit the following [README](./ResNet50_TF_Vehicle_Classification) file.
