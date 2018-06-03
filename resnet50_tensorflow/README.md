@@ -18,7 +18,9 @@ To train the model, you need to provide input to the several command line argume
 
 You can execute training with the following command.
 ```shell
-python resnet50_vehicle_classification.py --train_dir ~/GITHUB/Neural_Network_Coding_Examples/vehicle_dataset/train_dirsig/ --test_dir ~/GITHUB/Neural_Network_Coding_Examples/vehicle_dataset/validation_wami
+python resnet50_vehicle_classification.py
+--train_dir ~/GITHUB/Neural_Network_Coding_Examples/vehicle_dataset/train_dirsig/
+--test_dir ~/GITHUB/Neural_Network_Coding_Examples/vehicle_dataset/validation_wami
 --batch_size 32
 --learning_rate 0.0001
 --test_frequency 100
