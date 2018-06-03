@@ -21,7 +21,7 @@ To test the fidelity of the synthetic dataset, we validate the performance of th
 
 <img src="./figures/WAMI_positives.jpg" alt="WAMI_Positives" style="width: 300px;"/>
 
-The goal of this study is to reduce the dependency on the WAMI dataset to train a convolutional network model. With our synthetic dataset, we believe that the `overfitting` to the a couple of datasets captured from the WAMI dataset is avoided. 
+The goal of this study is to reduce the dependency on the WAMI dataset to train a convolutional network model. With our synthetic dataset, we believe that the `overfitting` to the a couple of datasets captured from the WAMI dataset is avoided.
 
 ### Download Links
 
@@ -42,4 +42,4 @@ If you use our aerial vehicle detection dataset in your research project, please
 
 ### Train ResNet50 Model on the DIRSIG Vehicle Classification Dataset
 
-In this step, the `DIRSIG` dataset is used to train the tensorflow implementation of the `ResNet50` network. To train the model, first download the dataset as explained in the steps above. For the next step, please visit the following [README](./ResNet50_TF_Vehicle_Classification) file.
+In this step, the `DIRSIG` dataset is used to train the tensorflow implementation of the `ResNet50` network. To train the model, first download the dataset as explained in the steps above. For the next step, please visit the following [README](./resnet50_tensorflow) file.
