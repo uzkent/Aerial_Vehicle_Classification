@@ -6,7 +6,8 @@ def parse_function(filename, label):
     image_string = tf.read_file(filename)
     image_decoded = tf.image.decode_jpeg(image_string)
     image_resized = tf.image.resize_images(image_decoded, [56, 56])
-    return image_resized, label
+    image_scaled = tf.image.per_image_standardization(image_resized)
+    return image_scaled, label
 
 def dataset_iterator(full_path, filenames):
     """ This function returns an iterator to the dataset """
@@ -15,13 +16,10 @@ def dataset_iterator(full_path, filenames):
     file_labels = []
     for file_information in filenames:
         file_names.append('{}/{}'.format(full_path, file_information[0]))
-        # Convert them to hot labels
-        if file_information[1] == 0:
-            file_labels.append([1, 0])
-        else:
-            file_labels.append([0, 1])
+        file_labels.append(file_information[1])
 
-    file_names = tf.constant(file_names)
-    file_labels = tf.constant(file_labels)
+
+    file_names = tf.constant(file_names[:2000])
+    file_labels = tf.one_hot(file_labels[:2000], 2)
 
     return file_names, file_labels

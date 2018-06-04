@@ -34,9 +34,11 @@ def main():
     file_names, file_labels = dataset_iterator(args.train_dir, train_filenames)
     train_dataset = tf.data.Dataset.from_tensor_slices((file_names, file_labels))
     train_dataset = train_dataset.map(parse_function)
+    train_dataset = train_dataset.repeat(200)
     train_dataset = train_dataset.shuffle(buffer_size=10000)
     train_batched_dataset = train_dataset.batch(args.batch_size)
-    train_iterator = train_batched_dataset.make_one_shot_iterator()
+    train_iterator = train_batched_dataset.make_initializable_iterator()
+    train_batch = train_iterator.get_next()
 
     # Define Placeholders for the input data and labels and also save the images into the summary
     x_train = tf.placeholder(tf.float32, [args.batch_size, 56, 56, 3])
@@ -46,64 +48,80 @@ def main():
     # Build the Graph
     with tf.variable_scope("FirstStageFeatureExtractor"):
         # Create the first layer parameters
-        W_conv1 = weight_variable([7, 7, 3, 64])
-        b_conv1 = bias_variable([64])
+        W_conv1 = weight_variable([7, 7, 3, 64], 'weigths')
+        b_conv1 = bias_variable([64], 'bias')
 
         # Perform first convolutional layer and apply max pooling
         out_conv1 = tf.nn.conv2d(x_train, W_conv1, strides=[1, 1, 1, 1], padding='SAME')
         out_relu1 = tf.nn.relu(out_conv1 + b_conv1)
 
     with tf.variable_scope("ResNetBlock1"):
-        # Apply ResNet Blocks
-        out_res1 = resnet50_block(out_relu1, 64, 64, 256, stride=[1, 2, 2, 1])
+        with tf.variable_scope("module1"):
+            # Apply ResNet Blocks
+            out_res1 = resnet50_block(out_relu1, 64, 64, 256, stride=[1, 2, 2, 1])
 
-        # Apply ResNet Blocks
-        out_res2 = resnet50_block(out_res1, 64, 256, 256)
+        with tf.variable_scope("module2"):
+            # Apply ResNet Blocks
+            out_res2 = resnet50_block(out_res1, 64, 256, 256)
 
-        # Apply ResNet Blocks
-        out_block1 = resnet50_block(out_res2, 64, 256, 256)
+        with tf.variable_scope("module3"):
+            # Apply ResNet Blocks
+            out_block1 = resnet50_block(out_res2, 64, 256, 256)
 
     with tf.variable_scope("ResNetBlock2"):
-        # Apply ResNet Blocks
-        out_res1 = resnet50_block(out_block1, 128, 256, 512, stride=[1, 2, 2, 1])
+        with tf.variable_scope("module1"):
+            # Apply ResNet Blocks
+            out_res1 = resnet50_block(out_block1, 128, 256, 512, stride=[1, 2, 2, 1])
 
-        # Apply ResNet Blocks
-        out_res2 = resnet50_block(out_res1, 128, 512, 512)
+        with tf.variable_scope("module2"):
+            # Apply ResNet Blocks
+            out_res2 = resnet50_block(out_res1, 128, 512, 512)
 
-        # Apply ResNet Blocks
-        out_res3 = resnet50_block(out_res2, 128, 512, 512)
+        with tf.variable_scope("module3"):
+            # Apply ResNet Blocks
+            out_res3 = resnet50_block(out_res2, 128, 512, 512)
 
-        # Apply ResNet Blocks
-        out_block2 = resnet50_block(out_res3, 128, 512, 512)
+        with tf.variable_scope("module4"):
+            # Apply ResNet Blocks
+            out_block2 = resnet50_block(out_res3, 128, 512, 512)
 
     with tf.variable_scope("ResNetBlock3"):
-        # Apply ResNet Blocks
-        out_res1 = resnet50_block(out_block2, 256, 512, 1024, stride=[1, 2, 2, 1])
+        with tf.variable_scope("module1"):
+            # Apply ResNet Blocks
+            out_res1 = resnet50_block(out_block2, 256, 512, 1024, stride=[1, 2, 2, 1])
 
-        # Apply ResNet Blocks
-        out_res2 = resnet50_block(out_res1, 256, 1024, 1024)
+        with tf.variable_scope("module2"):
+            # Apply ResNet Blocks
+            out_res2 = resnet50_block(out_res1, 256, 1024, 1024)
 
-        # Apply ResNet Blocks
-        out_res3 = resnet50_block(out_res2, 256, 1024, 1024)
+        with tf.variable_scope("module3"):
+            # Apply ResNet Blocks
+            out_res3 = resnet50_block(out_res2, 256, 1024, 1024)
 
-        # Apply ResNet Blocks
-        out_res4 = resnet50_block(out_res3, 256, 1024, 1024)
+        with tf.variable_scope("module4"):
+           # Apply ResNet Blocks
+           out_res4 = resnet50_block(out_res3, 256, 1024, 1024)
 
-        # Apply ResNet Blocks
-        out_res5 = resnet50_block(out_res4, 256, 1024, 1024)
+        with tf.variable_scope("module5"):
+           # Apply ResNet Blocks
+           out_res5 = resnet50_block(out_res4, 256, 1024, 1024)
 
-        # Apply ResNet Blocks
-        out_block3 = resnet50_block(out_res5, 256, 1024, 1024)
+        with tf.variable_scope("module6"):
+           # Apply ResNet Blocks
+           out_block3 = resnet50_block(out_res5, 256, 1024, 1024)
 
     with tf.variable_scope("ResNetBlock4"):
-        # Apply ResNet Blocks
-        out_res1 = resnet50_block(out_block3, 512, 1024, 2048)
+        with tf.variable_scope("module1"):
+            # Apply ResNet Blocks
+            out_res1 = resnet50_block(out_block3, 512, 1024, 2048)
 
-        # Apply ResNet Blocks
-        out_res2 = resnet50_block(out_res1, 512, 2048, 2048)
+        with tf.variable_scope("module2"):
+            # Apply ResNet Blocks
+            out_res2 = resnet50_block(out_res1, 512, 2048, 2048)
 
-        # Apply ResNet Blocks
-        out_block4 = resnet50_block(out_res2, 512, 2048, 2048)
+        with tf.variable_scope("module3"):
+            # Apply ResNet Blocks
+            out_block4 = resnet50_block(out_res2, 512, 2048, 2048)
 
     with tf.variable_scope("PredictionBlock"):
         # Apply Average Pooling to Reduce to 1x1 Feature Maps
@@ -111,15 +129,15 @@ def main():
                                         padding="VALID")
 
         # Fully connected layer 1
-        W_fc1 = weight_variable([2048, 1000])
-        b_fc1 = bias_variable([1000])
+        W_fc1 = weight_variable([2048, 1000], 'weights')
+        b_fc1 = bias_variable([1000], 'bias')
 
         out_fc_layer = tf.reshape(out_block4_pooled, [-1, 1*1*2048])
         out_fc_layer_act = tf.nn.relu(tf.matmul(out_fc_layer, W_fc1) + b_fc1)
 
         # Fully connected layer 2
-        W_fc2 = weight_variable([1000, 2])
-        b_fc2 = bias_variable([2])
+        W_fc2 = weight_variable([1000, 2], 'weights_2')
+        b_fc2 = bias_variable([2], 'bias_2')
 
         # Perform the final fully connected layer
         y_pred = tf.matmul(out_fc_layer_act, W_fc2) + b_fc2
@@ -127,7 +145,7 @@ def main():
     # Define the loss function and optimizer
     cross_entropy = tf.reduce_mean(
         tf.nn.softmax_cross_entropy_with_logits(labels=y_train, logits=y_pred))
-    optimizer = tf.train.AdamOptimizer(args.learning_rate).minimize(cross_entropy)
+    optimizer = tf.train.GradientDescentOptimizer(args.learning_rate).minimize(cross_entropy)
     tf.summary.scalar('cross_entropy', cross_entropy)
 
     # Define the Classification Accuracy
@@ -144,15 +162,15 @@ def main():
         train_writer = tf.summary.FileWriter('./train', sess.graph)
         test_writer = tf.summary.FileWriter('./test', sess.graph)
         sess.run(tf.global_variables_initializer())
+        sess.run(train_iterator.initializer)
         for epoch_number in range(args.number_epochs):
-            train_batch = train_iterator.get_next()
             summary, _, loss_value = sess.run([merged, optimizer, cross_entropy], feed_dict={x_train: train_batch[0].eval(session=sess),
             y_train: train_batch[1].eval(session=sess)})
             train_writer.add_summary(summary, epoch_number)
+            print("Loss at iteration {} : {}".format(epoch_number, loss_value))
 
             # Run the model on the test data for validation
             if epoch_number % args.test_frequency == 0:
-                print("Loss at iteration {} : {}".format(epoch_number, loss_value))
                 summary, acc = sess.run([merged, accuracy], feed_dict={
                 x_train:train_batch[0].eval(session=sess), y_train: train_batch[1].eval(session=sess)})
                 print("Accuracy at iteration {} : {}".format(epoch_number, acc))
