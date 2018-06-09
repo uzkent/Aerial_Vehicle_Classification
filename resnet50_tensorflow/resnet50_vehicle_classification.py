@@ -2,7 +2,6 @@ import tensorflow as tf
 import numpy as np
 import argparse
 
-from resnet_block import weight_variable, bias_variable, variable_summaries, resnet50_block
 from prepare_dataset import dataset_iterator, parse_function
 
 def get_parser():
@@ -23,8 +22,79 @@ def get_parser():
 
     return aparser
 
+class ResNet50():
+    """ This class contains the components of the ResNet50 Architecture """
+    def variable_summaries(self, var):
+        """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
+        with tf.name_scope('summaries'):
+            mean = tf.reduce_mean(var)
+            tf.summary.scalar('mean', mean)
+            with tf.name_scope('stddev'):
+              stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+            tf.summary.scalar('stddev', stddev)
+            tf.summary.scalar('max', tf.reduce_max(var))
+            tf.summary.scalar('min', tf.reduce_min(var))
+            tf.summary.histogram('histogram', var)
+
+    def weight_variable(self, shape, filter_name):
+        """ Define the Weights and Initialize Them and Attach to the Summary """
+        weights = tf.get_variable(filter_name, shape=shape, initializer=tf.contrib.layers.xavier_initializer())
+        self.variable_summaries(weights)
+        return weights
+
+    def bias_variable(self, shape, bias_name):
+        """ Define the Biases and Initialize Them and Attach to the Summary """
+        bias = tf.get_variable(bias_name, shape=shape, initializer=tf.contrib.layers.xavier_initializer())
+        self.variable_summaries(bias)
+        return bias
+
+    def _conv2d(self, input_data, shape, bias_shape, stride, filter_id, padding='SAME'):
+        """ Perform 2D convolution on the input data and apply RELU """
+        weights = self.weight_variable(shape, 'weights' + filter_id)
+        bias = self.bias_variable(bias_shape, 'bias' + filter_id)
+        output_conv = tf.nn.conv2d(input_data, weights, strides=stride, padding='SAME')
+        return tf.nn.relu(output_conv + bias)
+
+    def _fcl(self, input_data, shape, bias_shape, filter_id, classification_layer=False):
+        """ Run a Fully Connected Layer and ReLU if necessary """
+        weights = self.weight_variable(shape, 'weights'+  filter_id)
+        bias = self.bias_variable(bias_shape, 'bias' + filter_id)
+
+        if classification_layer:
+            return tf.matmul(input_data, weights) + bias
+        else:
+            out_fc_layer = tf.reshape(input_data, [-1, shape[0]])
+            return tf.nn.relu(tf.matmul(out_fc_layer, weights) + bias)
+
+    def resnet50_block(self, input_feature_map, number_bottleneck_channels,
+    number_input_channels, number_output_channels, stride=[1, 1, 1, 1]):
+        """ Run a ResNet block """
+        out_1 = self._conv2d(input_feature_map, [1, 1, number_input_channels, number_bottleneck_channels],
+        [number_bottleneck_channels], [1, 1, 1, 1], 'bottleneck_down')
+        out_2 = self._conv2d(out_1, [3, 3, number_bottleneck_channels, number_bottleneck_channels],
+        [number_bottleneck_channels], stride, 'conv3x3')
+        out_3 = self._conv2d(out_2, [1, 1, number_bottleneck_channels, number_output_channels],
+        [number_output_channels], [1, 1, 1, 1], 'bottleneck_up')
+        identity_mapping = self._conv2d(input_feature_map, [1, 1, number_input_channels, number_output_channels],
+        [number_output_channels], stride, 'identity_mapping')
+        return tf.add(identity_mapping, out_3)
+
+    def resnet50_module(self, input_data, number_blocks, number_bottleneck_channels, number_input_channels,
+    number_output_channels, stride=[1, 2, 2, 1]):
+        """ Run a ResNet module consisting of residual blocks """
+        for index, block in enumerate(range(number_blocks)):
+            if index == 0:
+                with tf.variable_scope('module' + str(index)):
+                    out = self.resnet50_block(input_data, number_bottleneck_channels, number_input_channels,
+                    number_output_channels, stride=stride)
+            else:
+                with tf.variable_scope('module' + str(index)):
+                    out = self.resnet50_block(out, number_bottleneck_channels, number_output_channels,
+                    number_output_channels, stride=[1, 1, 1, 1])
+
+        return out
+
 def main():
-    # Parse the Command Line Options
     args = get_parser().parse_args()
 
     # Read the filenames in the DIRSIG Vehicle Classification Dataset
@@ -39,108 +109,31 @@ def main():
     train_batched_dataset = train_dataset.batch(args.batch_size)
     train_iterator = train_batched_dataset.make_initializable_iterator()
     train_batch = train_iterator.get_next()
-
-    # Define Placeholders for the input data and labels and also save the images into the summary
     x_train = tf.placeholder(tf.float32, [args.batch_size, 56, 56, 3])
     y_train = tf.placeholder(tf.int32, [None, 2])
     tf.summary.image("training_input_image", x_train, max_outputs=20)
 
     # Build the Graph
-    with tf.variable_scope("FirstStageFeatureExtractor"):
-        # Create the first layer parameters
-        W_conv1 = weight_variable([7, 7, 3, 64], 'weigths')
-        b_conv1 = bias_variable([64], 'bias')
-
-        # Perform first convolutional layer and apply max pooling
-        out_conv1 = tf.nn.conv2d(x_train, W_conv1, strides=[1, 1, 1, 1], padding='SAME')
-        out_relu1 = tf.nn.relu(out_conv1 + b_conv1)
+    net = ResNet50()
+    with tf.variable_scope("FirstStageFeatureExtractor") as scope:
+        out_1 = net._conv2d(x_train, [3, 3, 3, 64], [64], [1, 1, 1, 1], 'conv3x3')
 
     with tf.variable_scope("ResNetBlock1"):
-        with tf.variable_scope("module1"):
-            # Apply ResNet Blocks
-            out_res1 = resnet50_block(out_relu1, 64, 64, 256, stride=[1, 2, 2, 1])
-
-        with tf.variable_scope("module2"):
-            # Apply ResNet Blocks
-            out_res2 = resnet50_block(out_res1, 64, 256, 256)
-
-        with tf.variable_scope("module3"):
-            # Apply ResNet Blocks
-            out_block1 = resnet50_block(out_res2, 64, 256, 256)
+        out_2 = net.resnet50_module(out_1, 3, 64, 64, 256, [1, 1, 1, 1])
 
     with tf.variable_scope("ResNetBlock2"):
-        with tf.variable_scope("module1"):
-            # Apply ResNet Blocks
-            out_res1 = resnet50_block(out_block1, 128, 256, 512, stride=[1, 2, 2, 1])
-
-        with tf.variable_scope("module2"):
-            # Apply ResNet Blocks
-            out_res2 = resnet50_block(out_res1, 128, 512, 512)
-
-        with tf.variable_scope("module3"):
-            # Apply ResNet Blocks
-            out_res3 = resnet50_block(out_res2, 128, 512, 512)
-
-        with tf.variable_scope("module4"):
-            # Apply ResNet Blocks
-            out_block2 = resnet50_block(out_res3, 128, 512, 512)
+        out_3 = net.resnet50_module(out_2, 4, 128, 256, 512)
 
     with tf.variable_scope("ResNetBlock3"):
-        with tf.variable_scope("module1"):
-            # Apply ResNet Blocks
-            out_res1 = resnet50_block(out_block2, 256, 512, 1024, stride=[1, 2, 2, 1])
-
-        with tf.variable_scope("module2"):
-            # Apply ResNet Blocks
-            out_res2 = resnet50_block(out_res1, 256, 1024, 1024)
-
-        with tf.variable_scope("module3"):
-            # Apply ResNet Blocks
-            out_res3 = resnet50_block(out_res2, 256, 1024, 1024)
-
-        with tf.variable_scope("module4"):
-           # Apply ResNet Blocks
-           out_res4 = resnet50_block(out_res3, 256, 1024, 1024)
-
-        with tf.variable_scope("module5"):
-           # Apply ResNet Blocks
-           out_res5 = resnet50_block(out_res4, 256, 1024, 1024)
-
-        with tf.variable_scope("module6"):
-           # Apply ResNet Blocks
-           out_block3 = resnet50_block(out_res5, 256, 1024, 1024)
+        out_4 = net.resnet50_module(out_3, 6, 256, 512, 1024)
 
     with tf.variable_scope("ResNetBlock4"):
-        with tf.variable_scope("module1"):
-            # Apply ResNet Blocks
-            out_res1 = resnet50_block(out_block3, 512, 1024, 2048)
-
-        with tf.variable_scope("module2"):
-            # Apply ResNet Blocks
-            out_res2 = resnet50_block(out_res1, 512, 2048, 2048)
-
-        with tf.variable_scope("module3"):
-            # Apply ResNet Blocks
-            out_block4 = resnet50_block(out_res2, 512, 2048, 2048)
+        out_5 = net.resnet50_module(out_4, 3, 512, 1024, 2048)
 
     with tf.variable_scope("PredictionBlock"):
-        # Apply Average Pooling to Reduce to 1x1 Feature Maps
-        out_block4_pooled = tf.nn.pool(out_block4, window_shape=[7, 7], pooling_type='AVG',
-                                        padding="VALID")
-
-        # Fully connected layer 1
-        W_fc1 = weight_variable([2048, 1000], 'weights')
-        b_fc1 = bias_variable([1000], 'bias')
-
-        out_fc_layer = tf.reshape(out_block4_pooled, [-1, 1*1*2048])
-        out_fc_layer_act = tf.nn.relu(tf.matmul(out_fc_layer, W_fc1) + b_fc1)
-
-        # Fully connected layer 2
-        W_fc2 = weight_variable([1000, 2], 'weights_2')
-        b_fc2 = bias_variable([2], 'bias_2')
-
-        # Perform the final fully connected layer
-        y_pred = tf.matmul(out_fc_layer_act, W_fc2) + b_fc2
+        out_6 = tf.nn.pool(out_5, window_shape=[7, 7], pooling_type='AVG', padding="VALID")
+        out_7 = net._fcl(out_6, [2048, 1024], [1024], 'fc_1')
+        y_pred = net._fcl(out_7, [1024, 2], [2], 'fc_2', classification_layer=True)
 
     # Define the loss function and optimizer
     cross_entropy = tf.reduce_mean(
