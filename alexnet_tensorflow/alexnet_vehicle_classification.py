@@ -34,7 +34,6 @@ def _conv2d(input_data, shape, bias_shape, stride, filter_id):
     return output_relu
 
 def main():
-    # Parse the Command Line Options
     args = get_parser().parse_args()
 
     # Read the filenames in the DIRSIG Vehicle Classification Dataset
@@ -49,8 +48,6 @@ def main():
     train_batched_dataset = train_dataset.batch(args.batch_size)
     train_iterator = train_batched_dataset.make_initializable_iterator()
     train_batch = train_iterator.get_next()
-
-    # Define Placeholders for the input data and labels and also save the images into the summary
     x_train = tf.placeholder(tf.float32, [args.batch_size, 227, 227, 3])
     y_train = tf.placeholder(tf.int32, [None, 2])
     tf.summary.image("training_input_image", x_train, max_outputs=20)
@@ -65,12 +62,10 @@ def main():
         out_6 = _conv2d(out_5, [3, 3, 384, 384], [384], [1, 1, 1, 1], '_4')
         out_7 = _conv2d(out_6, [3, 3, 384, 256], [256], [1, 1, 1, 1], '_5')
         out_8 = tf.nn.max_pool(out_7, ksize=[1, 3, 3, 1], strides=[1, 2, 2, 1], padding="VALID")
-        print out_8
 
     with tf.variable_scope("FullyConnectedLayers"):
         W_fc1 = weight_variable([6*6*256, 4096], 'weights_fc_1')
         b_fc1 = bias_variable([4096], 'bias_fc_1')
-        print out_8
         out_fc_layer = tf.reshape(out_8, [-1, 6*6*256])
         out_fc_layer1_act = tf.nn.relu(tf.matmul(out_fc_layer, W_fc1) + b_fc1)
 

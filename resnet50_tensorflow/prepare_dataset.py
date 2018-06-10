@@ -18,8 +18,7 @@ def dataset_iterator(full_path, filenames):
         file_names.append('{}/{}'.format(full_path, file_information[0]))
         file_labels.append(file_information[1])
 
-
-    file_names = tf.constant(file_names[:2000])
-    file_labels = tf.one_hot(file_labels[:2000], 2)
+    file_names = tf.constant(file_names)
+    file_labels = tf.one_hot(file_labels, 2)
 
     return file_names, file_labels
