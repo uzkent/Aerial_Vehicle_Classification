@@ -9,7 +9,7 @@ def get_parser():
     aparser = argparse.ArgumentParser()
     aparser.add_argument('--batch_size', type=int, default=32,
                          help='Batch size in the training stage')
-    aparser.add_argument('--number_epochs', type=int, default=10,
+    aparser.add_argument('--number_epochs', type=int, default=100,
                          help='Number of epochs to train the network')
     aparser.add_argument('--learning_rate', type=float, default=1e-4,
                          help='Learning rate')
@@ -94,6 +94,17 @@ class ResNet50():
 
         return out
 
+def get_data(file_names, file_labels, batch_size):
+    """ This function returns a pointer to iterate over the batches of data """
+    train_dataset = tf.data.Dataset.from_tensor_slices((file_names, file_labels))
+    train_dataset = train_dataset.map(parse_function)
+    train_dataset = train_dataset.repeat(200)
+    train_dataset = train_dataset.shuffle(buffer_size=1000)
+    train_batched_dataset = train_dataset.batch(batch_size)
+    train_iterator = train_batched_dataset.make_initializable_iterator()
+
+    return train_iterator.get_next()
+
 def main():
     args = get_parser().parse_args()
 
@@ -102,13 +113,7 @@ def main():
 
     # Prepare the training dataset
     file_names, file_labels = dataset_iterator(args.train_dir, train_filenames)
-    train_dataset = tf.data.Dataset.from_tensor_slices((file_names, file_labels))
-    train_dataset = train_dataset.map(parse_function)
-    train_dataset = train_dataset.repeat(200)
-    train_dataset = train_dataset.shuffle(buffer_size=10000)
-    train_batched_dataset = train_dataset.batch(args.batch_size)
-    train_iterator = train_batched_dataset.make_initializable_iterator()
-    train_batch = train_iterator.get_next()
+    train_batch = get_data(file_names, file_labels, args.batch_size)
     x_train = tf.placeholder(tf.float32, [args.batch_size, 56, 56, 3])
     y_train = tf.placeholder(tf.int32, [None, 2])
     tf.summary.image("training_input_image", x_train, max_outputs=20)
