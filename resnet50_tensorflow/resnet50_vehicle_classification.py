@@ -1,6 +1,7 @@
 import tensorflow as tf
 import numpy as np
 import argparse
+from tqdm import tqdm
 
 from prepare_dataset import dataset_iterator, parse_function
 
@@ -103,7 +104,7 @@ def get_data(file_names, file_labels, batch_size):
     train_batched_dataset = train_dataset.batch(batch_size)
     train_iterator = train_batched_dataset.make_initializable_iterator()
 
-    return train_iterator.get_next()
+    return train_iterator.get_next(), train_iterator
 
 def main():
     args = get_parser().parse_args()
@@ -113,7 +114,7 @@ def main():
 
     # Prepare the training dataset
     file_names, file_labels = dataset_iterator(args.train_dir, train_filenames)
-    train_batch = get_data(file_names, file_labels, args.batch_size)
+    train_batch, train_iterator = get_data(file_names, file_labels, args.batch_size)
     x_train = tf.placeholder(tf.float32, [args.batch_size, 56, 56, 3])
     y_train = tf.placeholder(tf.int32, [None, 2])
     tf.summary.image("training_input_image", x_train, max_outputs=20)
@@ -161,7 +162,7 @@ def main():
         test_writer = tf.summary.FileWriter('./test', sess.graph)
         sess.run(tf.global_variables_initializer())
         sess.run(train_iterator.initializer)
-        for epoch_number in range(args.number_epochs):
+        for epoch_number in tqdm(range(args.number_epochs)):
             summary, _, loss_value = sess.run([merged, optimizer, cross_entropy], feed_dict={x_train: train_batch[0].eval(session=sess),
             y_train: train_batch[1].eval(session=sess)})
             train_writer.add_summary(summary, epoch_number)
