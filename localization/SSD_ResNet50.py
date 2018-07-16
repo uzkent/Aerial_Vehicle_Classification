@@ -1,6 +1,9 @@
 import tensorflow as tf
 import numpy as np
 import pandas as pd
+import utils
+import pdb
+import math
 
 from tqdm import tqdm
 
@@ -8,20 +11,22 @@ class SSDResNet50():
     """ This class contains the components of the ResNet50 Architecture """
     feature_layers = ['block2', 'block3', 'block4']
 
-    def __init__(number_classes, anchor_sizes):
+    def __init__(self):
         """ Constructor for the SSD-ResNet50 Model """
         self.number_classes = 1
         self.number_iterations = 1000
         self.anchor_sizes = [(21., 45.),
                       (45., 99.),
-                      (99., 153.)],
+                      (99., 153.)]
         self.anchor_ratios = [[2, .5],
                         [2, .5],
-                        [2, .5]],
-        self.feat_shapes = [(56,56),(28,28),(14,14),(7,7)],
-        self.img_shape = [(300,300)]
-        self.images_dir = '/home/burak/pl/space_localizer/annotations/ships/v2/images.csv'
-        self.annotations_dir = '/home/burak/pl/space_localizer/annotations/ships/v2/annotations.csv'
+                        [2, .5]]
+        self.feat_shapes = [[200, 200],[100, 100],[50, 50]]
+        self.anchor_steps = [8, 16, 32]
+        self.img_shape = [400, 400]
+        self.batch_size = 1
+        self.positive_threshold = 0.7
+        self.negative_threshold = 0.3
 
     def weight_variable(self, shape, filter_name):
         """ Define the Weights and Initialize Them and Attach to the Summary """
@@ -79,7 +84,8 @@ class SSDResNet50():
 
         return out
 
-    def jaccard_with_anchors(anchors_layer, bbox):
+    '''
+    def jaccard_with_anchors(self, anchors_layer, bbox):
         """ Compute jaccard score between a ground truth box and the anchors.
             Source : https://github.com/balancap/SSD-Tensorflow/blob/e0e3104d3a2cc5d830fad041d4e56ebcf84caac3/nets/ssd_common.py#L64
         """
@@ -103,15 +109,16 @@ class SSDResNet50():
         union_vol = vol_anchors - inter_vol \
             + (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
         return tf.div(inter_vol, union_vol)
+    '''
 
-    def ssd_anchor_box_encoder(self, index):
+    def ssd_anchor_box_encoder(self, index, dtype=np.float32, offset=0.5):
         """ Compute SSD anchor boxes in the domain of feature maps of interest to perform
             detections.
         """
         # Compute the position grid: simple way.
         y, x = np.mgrid[0:self.feat_shapes[index][0], 0:self.feat_shapes[index][1]]
-        y = (y.astype(dtype) + offset) * step / self.img_shape[0]
-        x = (x.astype(dtype) + offset) * step / self.img_shape[1]
+        y = (y.astype(dtype) + offset) * self.anchor_steps[index] / self.img_shape[0]
+        x = (x.astype(dtype) + offset) * self.anchor_steps[index] / self.img_shape[1]
 
         # Expand dims to support easy broadcasting.
         y = np.expand_dims(y, axis=-1)
@@ -119,20 +126,16 @@ class SSDResNet50():
 
         # Compute relative height and width.
         # Tries to follow the original implementation of SSD for the order.
-        num_anchors = len(self.sizes) + len(self.anchor_ratios)
+        num_anchors = len(self.anchor_sizes[index]) + len(self.anchor_ratios[index])
         h = np.zeros((num_anchors, ), dtype=dtype)
         w = np.zeros((num_anchors, ), dtype=dtype)
         # Add first anchor boxes with ratio=1.
-        h[0] = self.sizes[0] / self.img_shape[0]
-        w[0] = self.sizes[0] / self.img_shape[1]
+        h[0] = self.anchor_sizes[index][0] / self.img_shape[0]
+        w[0] = self.anchor_sizes[index][0] / self.img_shape[1]
         di = 1
-        if len(self.sizes) > 1:
-            h[1] = math.sqrt(self.sizes[0] * self.sizes[1]) / self.img_shape[0]
-            w[1] = math.sqrt(self.sizes[0] * self.sizes[1]) / self.img_shape[1]
-            di += 1
-        for i, r in enumerate(self.anchor_ratios):
-            h[i+di] = self.sizes[0] / self.img_shape[0] / math.sqrt(r)
-            w[i+di] = self.sizes[0] / self.img_shape[1] * math.sqrt(r)
+        for i, r in enumerate(self.anchor_ratios[index]):
+            h[i+di] = self.anchor_sizes[index][0] / self.img_shape[0] / math.sqrt(float(r))
+            w[i+di] = self.anchor_sizes[index][0] / self.img_shape[1] * math.sqrt(float(r))
 
         return y, x, h, w
 
@@ -143,40 +146,47 @@ class SSDResNet50():
 
         # Location prediction - Returns nxnx(4xnum_anchors) tensor
         num_loc_pred = num_anchors * 4
-        loc_predictions = slim.conv2d(net, num_loc_pred, [3, 3], activation_fn=None,
-                               scope='conv_loc')
+        filter_loc = tf.get_variable('conv_loc', [3, 3, net.get_shape()[3].value, num_loc_pred],
+                            initializer=tf.truncated_normal_initializer(stddev=5e-2, dtype=tf.float32), dtype=tf.float32)
+        loc_predictions = tf.nn.conv2d(net, filter_loc,
+                                padding="SAME", strides=[1, 1, 1, 1])
         # Class prediction - Return nxnx(number_classes) tensor
         num_class_pred = num_anchors * self.number_classes
-        class_predictions = slim.conv2d(net, num_class_pred, [3, 3], activation_fn=None,
-                               scope='conv_cls')
+        filter_class = tf.get_variable('conv_class', [3, 3, net.get_shape()[3].value, num_class_pred],
+                            initializer=tf.truncated_normal_initializer(stddev=5e-2, dtype=tf.float32), dtype=tf.float32)
+        class_predictions = tf.nn.conv2d(net, filter_class,
+                                padding="SAME", strides=[1, 1, 1, 1])
 
         return class_predictions, loc_predictions
 
-    def loss_function(self, [gt_localizations, gt_classes], predictions, overall_overlaps):
+    def loss_function(self, gt_localizations, gt_classes, overall_predictions, overall_anchors):
         """ Define the loss function for SSD - Classification + Localization """
-        overall_loss = tf.variable(validate_shape=False)
-        for index, (overlaps, predictions) in enumerate(zip(overall_overlaps, overall_predictions)):
-            pos_samples = tf.cast(overlaps > 0.7, tf.uint16)
+        overall_loss = 0
+        for index, (predictions, anchors) in enumerate(zip(overall_predictions, overall_anchors)):
+            target_labels, target_localizations, target_scores = utils.ssd_bboxes_encode_layer(gt_classes, gt_localizations, anchors, 1)
+            pos_samples = tf.cast(target_scores > self.positive_threshold, tf.uint16)
             num_pos_samples = tf.reduce_sum(pos_samples)
-            neg_samples = tf.cast(overlaps < 0.3, tf.uint16)
+            neg_samples = tf.cast(target_scores < self.negative_threshold, tf.uint16)
             num_neg_samples = tf.reduce_sum(neg_samples)
 
             # [TODO]@BurakUzkent : Here we should limit the number of negative samples to 3*num_pos_samples
-
+            target_labels_flattened = tf.reshape(target_labels, [-1])
+            predictions_flattened = tf.reshape(predictions[0], [-1])
+            pos_samples_flattened = tf.to_float(tf.reshape(pos_samples, [-1]))
+            neg_samples_flattened = tf.to_float(tf.reshape(neg_samples, [-1]))
             with tf.name_scope('cross_entropy_pos{}'.format(index)):
-                loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions[0],
-                                                                      labels=gt_classes)
-                loss_classification_pos = tf.div(tf.reduce_sum(loss * pos_samples), batch_size, name='value')
+                loss = tf.nn.softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
+                loss_classification_pos = tf.div(tf.reduce_sum(loss * pos_samples_flattened), self.batch_size, name='value')
 
             with tf.name_scope('cross_entropy_neg{}'.format(index)):
-                loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions[0],
-                                                                      labels=gt_classes)
-                loss_classification_neg = tf.div(tf.reduce_sum(loss * neg_samples), batch_size, name='value')
+                loss = tf.nn.softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
+                loss_classification_neg = tf.div(tf.reduce_sum(loss * neg_samples_flattened), self.batch_size, name='value')
 
             with tf.name_scope('localization{}'.format(index)):
-                weights = tf.expand_dims(1.0 * pos_samples, axis=-1)
-                loss = tf.subtract(tf.abs(predictions[1]), tf.abs(gt_localizations))
-                loss_localizaiton = tf.div(tf.reduce_sum(loss * weights), batch_size, name='value')
+                pdb.set_trace()
+                weights = tf.expand_dims(1.0 * pos_samples_flattened, axis=-1)
+                loss = tf.subtract(tf.abs(predictions[1]), tf.abs(target_localizations))
+                loss_localizaiton = tf.div(tf.reduce_sum(loss * weights), self.batch_size, name='value')
 
             overall_loss += loss_classification_pos + loss_classification_neg + loss_localization
 
@@ -187,6 +197,7 @@ def ssd_resnet50():
     # Construct the Graph
     net = SSDResNet50()
     endpoints = {}
+    x_train = tf.placeholder(tf.float32, [net.batch_size, net.img_shape[0], net.img_shape[1], 1])
     with tf.variable_scope("FirstStageFeatureExtractor") as scope:
         out_1 = net._conv2d(x_train, [3, 3, 1, 64], [64], [1, 1, 1, 1], 'conv3x3')
     with tf.variable_scope("ResNetBlock1"):
@@ -209,32 +220,34 @@ def ssd_resnet50():
     # Perform Detections on the Desired Blocks
     overall_predictions = []
     overall_anchors = []
-    for index, layer in enumerate(endpoints):
-        with tf.variable_scope("PredictionModule{}".format(index))
+    for index, layer in enumerate(net.feature_layers):
+        with tf.variable_scope("PredictionModule{}".format(index)):
             overall_anchors.append(net.ssd_anchor_box_encoder(index))
             overall_predictions.append(net.detection_layer(endpoints[layer], index))
 
     # [TODO]@BurakUzkent : Add a module to read the ground truth data for the given batch
-    images_csv = pd.read_csv(net.images_dir)
-    annotations_csv = pd.to_csv(net.annotations_dir)
-    gt_bboxes, file_names = utils.annotation_finder(images_csv, annotations_csv)
-    dataset = utils.parse_function(file_names)
-    train_batch = create_tf_dataset(dataset)
+    file_names = ['~/Downloads/profile_picture.jpeg'] # An example image
+    gt_bboxes = tf.constant(np.reshape(np.asarray([0.1, 0.1, 0.2, 0.2], np.float32), (1,4)))
+    gt_classes = tf.constant([1], tf.int64)
+    # gt_bboxes, file_names = utils.annotation_finder(images_csv, annotations_csv)
+    train_batch, train_iterator = utils.create_tf_dataset(file_names, net.batch_size)
 
+    """
     # Find the overlaps between the anchors and ground truth bounding boxes
     overall_overlaps = []
     for gt_box in gt_bboxes:
         for anchor_layer in overall_anchors:
             overall_overlaps.append(net.jaccard_with_anchors(gt_box, anchor_layer))
+    """
 
-    total_loss = net.loss_function([gt_bboxes, gt_classes], overall_predictions, overall_overlaps)
+    total_loss = net.loss_function(gt_bboxes, gt_classes, overall_predictions, overall_anchors)
     optimizer = tf.train.AdamOptimizer(1e-4).minimize(total_loss)
 
     # Execute the graph
     with tf.Session() as sess:
         train_writer = tf.summary.FileWriter('./train', sess.graph)
         sess.run(tf.global_variables_initializer())
+        sess.run(train_iterator.initializer)
         for iteration_id in tqdm(range(net.number_iterations)):
             _, loss_value = sess.run([optimizer, total_loss], feed_dict={x_train: train_batch[0].eval(session=sess)})
             print("Loss at iteration {} : {}".format(iteration_id, loss_value))
-
