@@ -25,7 +25,7 @@ def ssd_bboxes_encode_layer(labels,
                            bboxes,
                            anchors_layer,
                            num_classes,
-                           ignore_threshold=0.5,
+                           positive_threshold=0.5,
                            prior_scaling=[0.1, 0.1, 0.2, 0.2],
                            dtype=tf.float32):
     """Encode groundtruth labels and bounding boxes using SSD anchors from
@@ -40,7 +40,6 @@ def ssd_bboxes_encode_layer(labels,
       (target_labels, target_localizations, target_scores): Target Tensors.
     """
     # Anchors coordinates and volume.
-    pdb.set_trace()
     yref, xref, href, wref = anchors_layer
     ymin = yref - href / 2.
     xmin = xref - wref / 2.
@@ -109,7 +108,7 @@ def ssd_bboxes_encode_layer(labels,
         # Mask: check threshold + scores + no annotations + num_classes.
         mask = tf.greater(jaccard, feat_scores)
         # mask = tf.logical_and(mask, tf.greater(jaccard, matching_threshold))
-        mask = tf.logical_and(mask, feat_scores > 0.5)
+        mask = tf.logical_and(mask, feat_scores > positive_threshold)
         mask = tf.logical_and(mask, label < num_classes)
         imask = tf.cast(mask, tf.int64)
         fmask = tf.cast(mask, dtype)

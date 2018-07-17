@@ -24,7 +24,7 @@ class SSDResNet50():
         self.feat_shapes = [[200, 200],[100, 100],[50, 50]]
         self.anchor_steps = [2, 4, 8]
         self.img_shape = [400, 400]
-        self.batch_size = 1
+        self.batch_size = 4
         self.positive_threshold = 0.7
         self.negative_threshold = 0.3
 
@@ -118,22 +118,21 @@ class SSDResNet50():
     def detection_layer(self, inputs, index):
         """ Predict bounding box locations and classes in each head """
         net = inputs
-        num_anchors = len(self.anchor_sizes[index]) + len(self.anchor_ratios[index])
+        num_anchors = len(self.anchor_sizes[index]) * (len(self.anchor_ratios[index]) + 1)
 
         # Location prediction - Returns nxnx(4xnum_anchors) tensor
         num_loc_pred = num_anchors * 4
         filter_loc = tf.get_variable('conv_loc', [3, 3, net.get_shape()[3].value, num_loc_pred],
                             initializer=tf.truncated_normal_initializer(stddev=5e-2, dtype=tf.float32), dtype=tf.float32)
-        loc_predictions = tf.nn.conv2d(net, filter_loc,
-                                padding="SAME", strides=[1, 1, 1, 1])
+        loc_predictions = tf.nn.conv2d(net, filter_loc, padding="SAME", strides=[1, 1, 1, 1])
         loc_predictions = utils.channel_to_last(loc_predictions)
         loc_predictions = tf.reshape(loc_predictions, utils.tensor_shape(loc_predictions, 4)[:-1]+[num_anchors, 4])
+
         # Class prediction - Return nxnx(number_classes) tensor
         num_class_pred = num_anchors * self.number_classes
         filter_class = tf.get_variable('conv_class', [3, 3, net.get_shape()[3].value, num_class_pred],
                             initializer=tf.truncated_normal_initializer(stddev=5e-2, dtype=tf.float32), dtype=tf.float32)
-        class_predictions = tf.nn.conv2d(net, filter_class,
-                                padding="SAME", strides=[1, 1, 1, 1])
+        class_predictions = tf.nn.conv2d(net, filter_class, padding="SAME", strides=[1, 1, 1, 1])
 
         return class_predictions, loc_predictions
 
@@ -141,7 +140,18 @@ class SSDResNet50():
         """ Define the loss function for SSD - Classification + Localization """
         overall_loss = 0
         for index, (predictions, anchors) in enumerate(zip(overall_predictions, overall_anchors)):
-            target_labels, target_localizations, target_scores = utils.ssd_bboxes_encode_layer(gt_classes, gt_localizations, anchors, self.number_classes)
+            target_labels_all = []
+            target_localizations_all = []
+            target_scores_all = []
+            for batch_index in range(self.batch_size):
+                target_tensor = utils.ssd_bboxes_encode_layer(gt_classes, gt_localizations, anchors,  self.number_classes, self.positive_threshold)
+                target_labels_all.append(target_tensor[0])
+                target_localizations_all.append(target_tensor[1])
+                target_scores_all.append(target_tensor[2])
+            target_labels = tf.stack(target_labels_all)
+            target_localizations = tf.stack(target_localizations_all)
+            target_scores = tf.stack(target_scores_all)
+
             pos_samples = tf.cast(target_scores > self.positive_threshold, tf.uint16)
             num_pos_samples = tf.reduce_sum(pos_samples)
             neg_samples = tf.cast(target_scores < self.negative_threshold, tf.uint16)
@@ -162,7 +172,7 @@ class SSDResNet50():
 
             with tf.name_scope('localization{}'.format(index)):
                 weights = tf.expand_dims(1.0 * tf.to_float(pos_samples), axis=-1)
-                loss = tf.subtract(tf.abs(predictions[1]), tf.abs(target_localizations))
+                loss = tf.abs(predictions[1] - target_localizations)
                 loss_localization = tf.div(tf.reduce_sum(loss * weights), self.batch_size, name='value')
 
             overall_loss += loss_classification_pos + loss_classification_neg + loss_localization
@@ -199,10 +209,11 @@ def ssd_resnet50():
             overall_predictions.append(net.detection_layer(endpoints[layer], index))
 
     # [TODO]@BurakUzkent : Add a module to read the ground truth data for the given batch
-    file_names = ['/Users/buzkent/Downloads/profile_picture.jpg']
-    gt_bboxes = [0.1, 0.1, 0.2, 0.2]
-    gt_bboxes = tf.constant(np.reshape(np.asarray(gt_bboxes, np.float32), (1, 4)))
-    gt_classes = tf.constant([1], tf.int64)
+    file_names = ['/Users/buzkent/Downloads/profile_picture.jpg', '/Users/buzkent/Downloads/profile_picture.jpg',
+                '/Users/buzkent/Downloads/profile_picture.jpg', '/Users/buzkent/Downloads/profile_picture.jpg']
+    gt_bboxes = [[0.1, 0.1, 0.2, 0.2], [0.1, 0.1, 0.2, 0.2], [0.1, 0.1, 0.2, 0.2], [0.1, 0.1, 0.2, 0.2]]
+    gt_bboxes = tf.constant(np.reshape(np.asarray(gt_bboxes, np.float32), (net.batch_size, 4)))
+    gt_classes = tf.constant([1, 1, 1, 1], tf.int64)
     train_batch, train_iterator = utils.create_tf_dataset(file_names, net.batch_size)
 
     total_loss = net.loss_function(gt_bboxes, gt_classes, overall_predictions, overall_anchors)
