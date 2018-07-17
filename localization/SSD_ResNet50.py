@@ -84,38 +84,12 @@ class SSDResNet50():
 
         return out
 
-    '''
-    def jaccard_with_anchors(self, anchors_layer, bbox):
-        """ Compute jaccard score between a ground truth box and the anchors.
-            Source : https://github.com/balancap/SSD-Tensorflow/blob/e0e3104d3a2cc5d830fad041d4e56ebcf84caac3/nets/ssd_common.py#L64
-        """
-        # [TODO]@BurakUzkent : Anchor boxes need to be projected to the image domain to
-        # compute IoU's w.r.t ground truth
-        yref, xref, href, wref = anchors_layer
-        ymin = yref - href / 2.
-        xmin = xref - wref / 2.
-        ymax = yref + href / 2.
-        xmax = xref + wref / 2.
-        vol_anchors = (xmax - xmin) * (ymax - ymin)
-
-        int_ymin = tf.maximum(ymin, bbox[0])
-        int_xmin = tf.maximum(xmin, bbox[1])
-        int_ymax = tf.minimum(ymax, bbox[2])
-        int_xmax = tf.minimum(xmax, bbox[3])
-        h = tf.maximum(int_ymax - int_ymin, 0.)
-        w = tf.maximum(int_xmax - int_xmin, 0.)
-
-        inter_vol = h * w
-        union_vol = vol_anchors - inter_vol \
-            + (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
-        return tf.div(inter_vol, union_vol)
-    '''
-
     def ssd_anchor_box_encoder(self, index, dtype=np.float32, offset=0.5):
         """ Compute SSD anchor boxes in the domain of feature maps of interest to perform
             detections.
         """
         # Compute the position grid: simple way.
+        pdb.set_trace()
         y, x = np.mgrid[0:self.feat_shapes[index][0], 0:self.feat_shapes[index][1]]
         y = (y.astype(dtype) + offset) * self.anchor_steps[index] / self.img_shape[0]
         x = (x.astype(dtype) + offset) * self.anchor_steps[index] / self.img_shape[1]
@@ -126,16 +100,19 @@ class SSDResNet50():
 
         # Compute relative height and width.
         # Tries to follow the original implementation of SSD for the order.
-        num_anchors = len(self.anchor_sizes[index]) + len(self.anchor_ratios[index])
+        num_anchors = len(self.anchor_sizes[index]) * (len(self.anchor_ratios[index]) + 1)
         h = np.zeros((num_anchors, ), dtype=dtype)
         w = np.zeros((num_anchors, ), dtype=dtype)
         # Add first anchor boxes with ratio=1.
-        h[0] = self.anchor_sizes[index][0] / self.img_shape[0]
-        w[0] = self.anchor_sizes[index][0] / self.img_shape[1]
-        di = 1
-        for i, r in enumerate(self.anchor_ratios[index]):
-            h[i+di] = self.anchor_sizes[index][0] / self.img_shape[0] / math.sqrt(float(r))
-            w[i+di] = self.anchor_sizes[index][0] / self.img_shape[1] * math.sqrt(float(r))
+        anchor_counter = 0
+        for temp_index in range(len(self.anchor_sizes[index])):
+            anchor_index = temp_index*(anchor_counter*(len(self.anchor_ratios[index])+1))
+            h[anchor_index] = self.anchor_sizes[index][temp_index] / self.img_shape[0]
+            w[anchor_index] = self.anchor_sizes[index][temp_index] / self.img_shape[1]
+            for i, r in enumerate(self.anchor_ratios[index]):
+                h[anchor_index+i+1] = self.anchor_sizes[index][temp_index] / self.img_shape[0] / math.sqrt(float(r))
+                w[anchor_index+i+1] = self.anchor_sizes[index][temp_index] / self.img_shape[1] * math.sqrt(float(r))
+            anchor_counter += 1
 
         return y, x, h, w
 
@@ -223,9 +200,8 @@ def ssd_resnet50():
             overall_predictions.append(net.detection_layer(endpoints[layer], index))
 
     # [TODO]@BurakUzkent : Add a module to read the ground truth data for the given batch
-    file_names = ['/Users/buzkent/Downloads/profile_picture.jpg'] #, '/Users/buzkent/Downloads/profile_picture.jpg',
-                #'/Users/buzkent/Downloads/profile_picture.jpg', '/Users/buzkent/Downloads/profile_picture.jpg'] # An example image
-    gt_bboxes = [0.1, 0.1, 0.2, 0.2] # [0.1, 0.1, 0.2, 0.2], [0.1, 0.1, 0.2, 0.2], [0.1, 0.1, 0.2, 0.2]]
+    file_names = ['/Users/buzkent/Downloads/profile_picture.jpg']
+    gt_bboxes = [0.1, 0.1, 0.2, 0.2]
     gt_bboxes = tf.constant(np.reshape(np.asarray(gt_bboxes, np.float32), (1, 4)))
     gt_classes = tf.constant([1], tf.int64)
     train_batch, train_iterator = utils.create_tf_dataset(file_names, net.batch_size)
