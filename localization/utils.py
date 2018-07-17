@@ -10,7 +10,7 @@ def parse_function(filename):
     return image_scaled
 
 
-def create_tf_dataset(file_names, batch_size):
+def create_tf_dataset(file_names, batch_size=1):
     """ This function returns a pointer to iterate over the batches of data """
     train_dataset = tf.data.Dataset.from_tensor_slices((file_names))
     train_dataset = train_dataset.map(parse_function)
@@ -101,8 +101,9 @@ def ssd_bboxes_encode_layer(labels,
           - only update if beat the score of other bboxes.
         """
         # Jaccard score.
+        bboxes_tr = tf.Print(bboxes, [bboxes])
         label = labels[i]
-        bbox = bboxes[i]
+        bbox = bboxes_tr[i]
         jaccard = jaccard_with_anchors(bbox)
         # Mask: check threshold + scores + no annotations + num_classes.
         mask = tf.greater(jaccard, feat_scores)
@@ -143,3 +144,37 @@ def ssd_bboxes_encode_layer(labels,
     # Use SSD ordering: x / y / w / h instead of ours.
     feat_localizations = tf.stack([feat_cx, feat_cy, feat_w, feat_h], axis=-1)
     return feat_labels, feat_localizations, feat_scores
+
+def channel_to_last(inputs,
+                    data_format='NHWC',
+                    scope=None):
+    """Move the channel axis to the last dimension. Allows to
+    provide a single output format whatever the input data format.
+    Args:
+      inputs: Input Tensor;
+      data_format: NHWC or NCHW.
+    Return:
+      Input in NHWC format.
+    """
+    with tf.name_scope(scope, 'channel_to_last', [inputs]):
+        if data_format == 'NHWC':
+            net = inputs
+        elif data_format == 'NCHW':
+            net = tf.transpose(inputs, perm=(0, 2, 3, 1))
+        return net
+
+def tensor_shape(x, rank=3):
+    """Returns the dimensions of a tensor.
+    Args:
+      image: A N-D Tensor of shape.
+    Returns:
+      A list of dimensions. Dimensions that are statically known are python
+        integers,otherwise they are integer scalar tensors.
+    """
+    if x.get_shape().is_fully_defined():
+        return x.get_shape().as_list()
+    else:
+        static_shape = x.get_shape().with_rank(rank).as_list()
+        dynamic_shape = tf.unstack(tf.shape(x), rank)
+        return [s if s is not None else d
+                for s, d in zip(static_shape, dynamic_shape)]

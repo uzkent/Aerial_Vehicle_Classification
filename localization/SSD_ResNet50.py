@@ -150,6 +150,8 @@ class SSDResNet50():
                             initializer=tf.truncated_normal_initializer(stddev=5e-2, dtype=tf.float32), dtype=tf.float32)
         loc_predictions = tf.nn.conv2d(net, filter_loc,
                                 padding="SAME", strides=[1, 1, 1, 1])
+        loc_predictions = utils.channel_to_last(loc_predictions)
+        loc_predictions = tf.reshape(loc_predictions, utils.tensor_shape(loc_predictions, 4)[:-1]+[num_anchors, 4])
         # Class prediction - Return nxnx(number_classes) tensor
         num_class_pred = num_anchors * self.number_classes
         filter_class = tf.get_variable('conv_class', [3, 3, net.get_shape()[3].value, num_class_pred],
@@ -163,7 +165,7 @@ class SSDResNet50():
         """ Define the loss function for SSD - Classification + Localization """
         overall_loss = 0
         for index, (predictions, anchors) in enumerate(zip(overall_predictions, overall_anchors)):
-            target_labels, target_localizations, target_scores = utils.ssd_bboxes_encode_layer(gt_classes, gt_localizations, anchors, 1)
+            target_labels, target_localizations, target_scores = utils.ssd_bboxes_encode_layer(gt_classes, gt_localizations, anchors, self.number_classes)
             pos_samples = tf.cast(target_scores > self.positive_threshold, tf.uint16)
             num_pos_samples = tf.reduce_sum(pos_samples)
             neg_samples = tf.cast(target_scores < self.negative_threshold, tf.uint16)
@@ -183,10 +185,9 @@ class SSDResNet50():
                 loss_classification_neg = tf.div(tf.reduce_sum(loss * neg_samples_flattened), self.batch_size, name='value')
 
             with tf.name_scope('localization{}'.format(index)):
-                pdb.set_trace()
-                weights = tf.expand_dims(1.0 * pos_samples_flattened, axis=-1)
+                weights = tf.expand_dims(1.0 * tf.to_float(pos_samples), axis=-1)
                 loss = tf.subtract(tf.abs(predictions[1]), tf.abs(target_localizations))
-                loss_localizaiton = tf.div(tf.reduce_sum(loss * weights), self.batch_size, name='value')
+                loss_localization = tf.div(tf.reduce_sum(loss * weights), self.batch_size, name='value')
 
             overall_loss += loss_classification_pos + loss_classification_neg + loss_localization
 
@@ -197,9 +198,9 @@ def ssd_resnet50():
     # Construct the Graph
     net = SSDResNet50()
     endpoints = {}
-    x_train = tf.placeholder(tf.float32, [net.batch_size, net.img_shape[0], net.img_shape[1], 1])
+    x_train = tf.placeholder(tf.float32, [net.batch_size, net.img_shape[0], net.img_shape[1], 3])
     with tf.variable_scope("FirstStageFeatureExtractor") as scope:
-        out_1 = net._conv2d(x_train, [3, 3, 1, 64], [64], [1, 1, 1, 1], 'conv3x3')
+        out_1 = net._conv2d(x_train, [3, 3, 3, 64], [64], [1, 1, 1, 1], 'conv3x3')
     with tf.variable_scope("ResNetBlock1"):
         out_2 = net.resnet50_module(out_1, 3, 64, 64, 256, [1, 1, 1, 1])
         endpoints['block1'] = out_2
@@ -211,11 +212,7 @@ def ssd_resnet50():
         endpoints['block3'] = out_4
     with tf.variable_scope("ResNetBlock4"):
         out_5 = net.resnet50_module(out_4, 3, 512, 1024, 2048)
-        endpoints['block4'] = out_4
-    with tf.variable_scope("PredictionBlock"):
-        out_6 = tf.nn.pool(out_5, window_shape=[8, 8], pooling_type='AVG', padding="VALID")
-        out_7 = net._fcl(out_6, [2048, 1024], [1024], 'fc_1')
-        y_pred = net._fcl(out_7, [1024, 2], [2], 'fc_2', classification_layer=True)
+        endpoints['block4'] = out_5
 
     # Perform Detections on the Desired Blocks
     overall_predictions = []
@@ -226,19 +223,12 @@ def ssd_resnet50():
             overall_predictions.append(net.detection_layer(endpoints[layer], index))
 
     # [TODO]@BurakUzkent : Add a module to read the ground truth data for the given batch
-    file_names = ['~/Downloads/profile_picture.jpeg'] # An example image
-    gt_bboxes = tf.constant(np.reshape(np.asarray([0.1, 0.1, 0.2, 0.2], np.float32), (1,4)))
+    file_names = ['/Users/buzkent/Downloads/profile_picture.jpg'] #, '/Users/buzkent/Downloads/profile_picture.jpg',
+                #'/Users/buzkent/Downloads/profile_picture.jpg', '/Users/buzkent/Downloads/profile_picture.jpg'] # An example image
+    gt_bboxes = [0.1, 0.1, 0.2, 0.2] # [0.1, 0.1, 0.2, 0.2], [0.1, 0.1, 0.2, 0.2], [0.1, 0.1, 0.2, 0.2]]
+    gt_bboxes = tf.constant(np.reshape(np.asarray(gt_bboxes, np.float32), (1, 4)))
     gt_classes = tf.constant([1], tf.int64)
-    # gt_bboxes, file_names = utils.annotation_finder(images_csv, annotations_csv)
     train_batch, train_iterator = utils.create_tf_dataset(file_names, net.batch_size)
-
-    """
-    # Find the overlaps between the anchors and ground truth bounding boxes
-    overall_overlaps = []
-    for gt_box in gt_bboxes:
-        for anchor_layer in overall_anchors:
-            overall_overlaps.append(net.jaccard_with_anchors(gt_box, anchor_layer))
-    """
 
     total_loss = net.loss_function(gt_bboxes, gt_classes, overall_predictions, overall_anchors)
     optimizer = tf.train.AdamOptimizer(1e-4).minimize(total_loss)
@@ -249,5 +239,5 @@ def ssd_resnet50():
         sess.run(tf.global_variables_initializer())
         sess.run(train_iterator.initializer)
         for iteration_id in tqdm(range(net.number_iterations)):
-            _, loss_value = sess.run([optimizer, total_loss], feed_dict={x_train: train_batch[0].eval(session=sess)})
+            _, loss_value = sess.run([optimizer, total_loss], feed_dict={x_train: train_batch.eval(session=sess)})
             print("Loss at iteration {} : {}".format(iteration_id, loss_value))
