@@ -22,7 +22,7 @@ class SSDResNet50():
                         [2, .5],
                         [2, .5]]
         self.feat_shapes = [[200, 200],[100, 100],[50, 50]]
-        self.anchor_steps = [8, 16, 32]
+        self.anchor_steps = [2, 4, 8]
         self.img_shape = [400, 400]
         self.batch_size = 1
         self.positive_threshold = 0.7
@@ -89,7 +89,6 @@ class SSDResNet50():
             detections.
         """
         # Compute the position grid: simple way.
-        pdb.set_trace()
         y, x = np.mgrid[0:self.feat_shapes[index][0], 0:self.feat_shapes[index][1]]
         y = (y.astype(dtype) + offset) * self.anchor_steps[index] / self.img_shape[0]
         x = (x.astype(dtype) + offset) * self.anchor_steps[index] / self.img_shape[1]
