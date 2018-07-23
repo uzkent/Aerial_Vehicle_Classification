@@ -10,12 +10,12 @@ def parse_function(filename):
     return image_scaled
 
 
-def create_tf_dataset(file_names, batch_size=1):
+def create_tf_dataset(file_names, buffer_size, number_iterations_dataset, batch_size=1):
     """ This function returns a pointer to iterate over the batches of data """
     train_dataset = tf.data.Dataset.from_tensor_slices((file_names))
     train_dataset = train_dataset.map(parse_function)
-    train_dataset = train_dataset.repeat(20)
-    train_dataset = train_dataset.shuffle(buffer_size=100)
+    train_dataset = train_dataset.repeat(number_iterations_dataset)
+    train_dataset = train_dataset.shuffle(buffer_size=buffer_size)
     train_batched_dataset = train_dataset.batch(batch_size)
     train_iterator = train_batched_dataset.make_initializable_iterator()
 

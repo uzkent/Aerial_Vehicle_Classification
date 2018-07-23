@@ -6,11 +6,11 @@ import math
 
 class SSDResNet50():
     """ This class contains the components of the ResNet50 Architecture """
-    feature_layers = ['block4'] #, 'block3', 'block4']
+    feature_layers = ['block2', 'block3', 'block4']
 
     def __init__(self):
         """ Constructor for the SSD-ResNet50 Model """
-        self.number_classes = 2
+        self.number_classes = 2 # +1 for background class
         self.number_iterations = 1000
         self.anchor_sizes = [(25.,50.),
                       (45., 99.),
@@ -18,11 +18,13 @@ class SSDResNet50():
         self.anchor_ratios = [[2, .5],
                         [2, .5],
                         [2, .5]]
-        self.feat_shapes = [[16, 16],[100, 100],[50, 50]]
-        self.anchor_steps = [8, 4, 8]
+        self.feat_shapes = [[64, 64],[32, 32],[16, 16]]
+        self.anchor_steps = [2, 4, 8]
         self.img_shape = [128, 128]
         self.batch_size = 1
-        self.positive_threshold = 0.67
+        self.number_iterations_dataset = 100
+        self.buffer_size = 100
+        self.positive_threshold = 0.6
         self.negative_threshold = 0.3
 
     def weight_variable(self, shape, filter_name):
@@ -167,26 +169,25 @@ class SSDResNet50():
             # Construct the loss function
             with tf.name_scope('cross_entropy_pos{}'.format(index)):
                 loss_pos = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
-                loss_pos = tf.Print(loss_pos, [loss_pos], "Without Positives Mask")
                 positives_only_loss = tf.reduce_sum(loss_pos * tf.contrib.layers.flatten(pos_samples_flattened))
-                positives_only_loss = tf.Print(positives_only_loss, [positives_only_loss], "With Positives Mask")
+                positives_only_loss = tf.Print(positives_only_loss, [positives_only_loss], "-> Positives Loss")
                 loss_classification_pos = tf.div(positives_only_loss, self.batch_size)
                        
             with tf.name_scope('cross_entropy_neg{}'.format(index)):
                 loss_neg = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
                 negatives_only_loss = tf.reduce_sum(loss_neg * tf.contrib.layers.flatten(neg_samples_flattened))
                 loss_classification_neg = tf.div(negatives_only_loss, self.batch_size * num_neg_samples)            
+                loss_classification_neg = tf.Print(loss_classification_neg, [loss_classification_neg], "-> Negatives Loss")
 
-            loss_classification_neg = tf.Print(loss_classification_neg, [loss_classification_neg], "Negative Loss")
             with tf.name_scope('localization{}'.format(index)):
                 weights = tf.expand_dims(1.0 * tf.to_float(pos_samples), axis=-1)
                 loss = tf.abs(predictions[1] - target_localizations)
                 loss_localization = tf.div(tf.reduce_sum(loss * weights), self.batch_size)
-                loss_localization = tf.Print(loss_localization, [loss_localization], "Localization Loss")
+                loss_localization = tf.Print(loss_localization, [loss_localization], "-> Localization Loss")
 
             overall_loss += loss_classification_pos + loss_classification_neg + loss_localization
 
-        return overall_loss, target_labels_flattened, target_scores
+        return overall_loss
 
 # Construct the Graph
 net = SSDResNet50()
@@ -220,7 +221,7 @@ file_names = ['profile_picture.jpg']
 gt_bboxes = [[0.2, 0.2, 0.4, 0.4]]
 gt_bboxes = tf.constant(np.reshape(np.asarray(gt_bboxes, np.float32), (net.batch_size, 4)), tf.float32)
 gt_classes = tf.constant([1], tf.int64)
-train_batch, train_iterator = utils.create_tf_dataset(file_names, net.batch_size)
+train_batch, train_iterator = utils.create_tf_dataset(file_names, net.buffer_size, net.number_iterations_dataset, net.batch_size)
 
 # Construct the Loss Function and Define Optimizer
 total_loss = net.loss_function(gt_bboxes, gt_classes, overall_predictions, overall_anchors)
