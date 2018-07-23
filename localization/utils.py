@@ -14,8 +14,8 @@ def create_tf_dataset(file_names, batch_size=1):
     """ This function returns a pointer to iterate over the batches of data """
     train_dataset = tf.data.Dataset.from_tensor_slices((file_names))
     train_dataset = train_dataset.map(parse_function)
-    train_dataset = train_dataset.repeat(200)
-    train_dataset = train_dataset.shuffle(buffer_size=1000)
+    train_dataset = train_dataset.repeat(20)
+    train_dataset = train_dataset.shuffle(buffer_size=100)
     train_batched_dataset = train_dataset.batch(batch_size)
     train_iterator = train_batched_dataset.make_initializable_iterator()
 
@@ -66,7 +66,7 @@ def ssd_bboxes_encode_layer(labels,
         int_xmax = tf.minimum(xmax, bbox[3])
         h = tf.maximum(int_ymax - int_ymin, 0.)
         w = tf.maximum(int_xmax - int_xmin, 0.)
-        # Volumes.
+        # Volumes
         inter_vol = h * w
         union_vol = vol_anchors - inter_vol \
             + (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
@@ -100,18 +100,20 @@ def ssd_bboxes_encode_layer(labels,
           - assign values when jaccard > 0.5;
           - only update if beat the score of other bboxes.
         """
-        # Jaccard score.
-        bboxes_tr = tf.Print(bboxes, [bboxes])
+        # Jaccard score
         label = labels[i]
-        bbox = bboxes_tr[i]
+        bbox = bboxes[i]
         jaccard = jaccard_with_anchors(bbox)
+
         # Mask: check threshold + scores + no annotations + num_classes.
         mask = tf.greater(jaccard, feat_scores)
-        # mask = tf.logical_and(mask, tf.greater(jaccard, matching_threshold))
-        mask = tf.logical_and(mask, feat_scores > positive_threshold)
+        mask = tf.logical_and(mask, feat_scores > -0.5)
+
+        # [TODO] : Fix the following line
         mask = tf.logical_and(mask, label < num_classes)
         imask = tf.cast(mask, tf.int64)
         fmask = tf.cast(mask, dtype)
+        
         # Update values using mask.
         feat_labels = imask * label + (1 - imask) * feat_labels
         feat_scores = tf.where(mask, jaccard, feat_scores)
@@ -123,6 +125,7 @@ def ssd_bboxes_encode_layer(labels,
 
         return [i+1, feat_labels, feat_scores,
                 feat_ymin, feat_xmin, feat_ymax, feat_xmax]
+
     # Main loop definition.
     i = 0
     [i, feat_labels, feat_scores,

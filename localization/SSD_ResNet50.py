@@ -1,31 +1,28 @@
 import tensorflow as tf
 import numpy as np
-import pandas as pd
 import utils
 import pdb
 import math
 
-from tqdm import tqdm
-
 class SSDResNet50():
     """ This class contains the components of the ResNet50 Architecture """
-    feature_layers = ['block2', 'block3', 'block4']
+    feature_layers = ['block4'] #, 'block3', 'block4']
 
     def __init__(self):
         """ Constructor for the SSD-ResNet50 Model """
-        self.number_classes = 1
+        self.number_classes = 2
         self.number_iterations = 1000
-        self.anchor_sizes = [(21., 45.),
+        self.anchor_sizes = [(25.,50.),
                       (45., 99.),
                       (99., 153.)]
         self.anchor_ratios = [[2, .5],
                         [2, .5],
                         [2, .5]]
-        self.feat_shapes = [[200, 200],[100, 100],[50, 50]]
-        self.anchor_steps = [2, 4, 8]
-        self.img_shape = [400, 400]
-        self.batch_size = 4
-        self.positive_threshold = 0.7
+        self.feat_shapes = [[16, 16],[100, 100],[50, 50]]
+        self.anchor_steps = [8, 4, 8]
+        self.img_shape = [128, 128]
+        self.batch_size = 1
+        self.positive_threshold = 0.67
         self.negative_threshold = 0.3
 
     def weight_variable(self, shape, filter_name):
@@ -102,6 +99,7 @@ class SSDResNet50():
         num_anchors = len(self.anchor_sizes[index]) * (len(self.anchor_ratios[index]) + 1)
         h = np.zeros((num_anchors, ), dtype=dtype)
         w = np.zeros((num_anchors, ), dtype=dtype)
+
         # Add first anchor boxes with ratio=1.
         anchor_counter = 0
         for temp_index in range(len(self.anchor_sizes[index])):
@@ -112,7 +110,7 @@ class SSDResNet50():
                 h[anchor_index+i+1] = self.anchor_sizes[index][temp_index] / self.img_shape[0] / math.sqrt(float(r))
                 w[anchor_index+i+1] = self.anchor_sizes[index][temp_index] / self.img_shape[1] * math.sqrt(float(r))
             anchor_counter += 1
-
+ 
         return y, x, h, w
 
     def detection_layer(self, inputs, index):
@@ -133,6 +131,8 @@ class SSDResNet50():
         filter_class = tf.get_variable('conv_class', [3, 3, net.get_shape()[3].value, num_class_pred],
                             initializer=tf.truncated_normal_initializer(stddev=5e-2, dtype=tf.float32), dtype=tf.float32)
         class_predictions = tf.nn.conv2d(net, filter_class, padding="SAME", strides=[1, 1, 1, 1])
+        class_predictions = utils.channel_to_last(class_predictions)
+        class_predictions = tf.reshape(class_predictions, utils.tensor_shape(class_predictions, 4)[:-1]+[num_anchors, self.number_classes])
 
         return class_predictions, loc_predictions
 
@@ -148,82 +148,89 @@ class SSDResNet50():
                 target_labels_all.append(target_tensor[0])
                 target_localizations_all.append(target_tensor[1])
                 target_scores_all.append(target_tensor[2])
-            target_labels = tf.stack(target_labels_all)
+            target_labels = tf.concat(target_labels_all, axis=1)
             target_localizations = tf.stack(target_localizations_all)
             target_scores = tf.stack(target_scores_all)
-
+           
+            # Determine the Positive and Negative Samples
             pos_samples = tf.cast(target_scores > self.positive_threshold, tf.uint16)
             num_pos_samples = tf.reduce_sum(pos_samples)
-            neg_samples = tf.cast(target_scores < self.negative_threshold, tf.uint16)
+            neg_samples = tf.cast(target_scores < self.negative_threshold, tf.float32)
             num_neg_samples = tf.reduce_sum(neg_samples)
-
+             
             # [TODO]@BurakUzkent : Here we should limit the number of negative samples to 3*num_pos_samples
             target_labels_flattened = tf.reshape(target_labels, [-1])
-            predictions_flattened = tf.reshape(predictions[0], [-1])
-            pos_samples_flattened = tf.to_float(tf.reshape(pos_samples, [-1]))
-            neg_samples_flattened = tf.to_float(tf.reshape(neg_samples, [-1]))
+            predictions_flattened = tf.reshape(predictions[0], [-1, self.number_classes])
+            pos_samples_flattened = tf.expand_dims(tf.to_float(tf.contrib.layers.flatten(pos_samples)), -1)
+            neg_samples_flattened = tf.expand_dims(tf.to_float(tf.contrib.layers.flatten(neg_samples)), -1)     
+         
+            # Construct the loss function
             with tf.name_scope('cross_entropy_pos{}'.format(index)):
-                loss = tf.nn.softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
-                loss_classification_pos = tf.div(tf.reduce_sum(loss * pos_samples_flattened), self.batch_size, name='value')
-
+                loss_pos = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
+                loss_pos = tf.Print(loss_pos, [loss_pos], "Without Positives Mask")
+                positives_only_loss = tf.reduce_sum(loss_pos * tf.contrib.layers.flatten(pos_samples_flattened))
+                positives_only_loss = tf.Print(positives_only_loss, [positives_only_loss], "With Positives Mask")
+                loss_classification_pos = tf.div(positives_only_loss, self.batch_size)
+                       
             with tf.name_scope('cross_entropy_neg{}'.format(index)):
-                loss = tf.nn.softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
-                loss_classification_neg = tf.div(tf.reduce_sum(loss * neg_samples_flattened), self.batch_size, name='value')
+                loss_neg = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
+                negatives_only_loss = tf.reduce_sum(loss_neg * tf.contrib.layers.flatten(neg_samples_flattened))
+                loss_classification_neg = tf.div(negatives_only_loss, self.batch_size * num_neg_samples)            
 
+            loss_classification_neg = tf.Print(loss_classification_neg, [loss_classification_neg], "Negative Loss")
             with tf.name_scope('localization{}'.format(index)):
                 weights = tf.expand_dims(1.0 * tf.to_float(pos_samples), axis=-1)
                 loss = tf.abs(predictions[1] - target_localizations)
-                loss_localization = tf.div(tf.reduce_sum(loss * weights), self.batch_size, name='value')
+                loss_localization = tf.div(tf.reduce_sum(loss * weights), self.batch_size)
+                loss_localization = tf.Print(loss_localization, [loss_localization], "Localization Loss")
 
             overall_loss += loss_classification_pos + loss_classification_neg + loss_localization
 
-        return overall_loss
+        return overall_loss, target_labels_flattened, target_scores
 
-def ssd_resnet50():
+# Construct the Graph
+net = SSDResNet50()
+endpoints = {}
+x_train = tf.placeholder(tf.float32, [net.batch_size, net.img_shape[0], net.img_shape[1], 3])
+with tf.variable_scope("FirstStageFeatureExtractor") as scope:
+    out_1 = net._conv2d(x_train, [3, 3, 3, 64], [64], [1, 1, 1, 1], 'conv3x3')
+with tf.variable_scope("ResNetBlock1"):
+    out_2 = net.resnet50_module(out_1, 3, 64, 64, 256, [1, 1, 1, 1])
+    endpoints['block1'] = out_2
+with tf.variable_scope("ResNetBlock2"):
+    out_3 = net.resnet50_module(out_2, 4, 128, 256, 512)
+    endpoints['block2'] = out_3
+with tf.variable_scope("ResNetBlock3"):
+    out_4 = net.resnet50_module(out_3, 6, 256, 512, 1024)
+    endpoints['block3'] = out_4
+with tf.variable_scope("ResNetBlock4"):
+    out_5 = net.resnet50_module(out_4, 3, 512, 1024, 2048)
+    endpoints['block4'] = out_5
 
-    # Construct the Graph
-    net = SSDResNet50()
-    endpoints = {}
-    x_train = tf.placeholder(tf.float32, [net.batch_size, net.img_shape[0], net.img_shape[1], 3])
-    with tf.variable_scope("FirstStageFeatureExtractor") as scope:
-        out_1 = net._conv2d(x_train, [3, 3, 3, 64], [64], [1, 1, 1, 1], 'conv3x3')
-    with tf.variable_scope("ResNetBlock1"):
-        out_2 = net.resnet50_module(out_1, 3, 64, 64, 256, [1, 1, 1, 1])
-        endpoints['block1'] = out_2
-    with tf.variable_scope("ResNetBlock2"):
-        out_3 = net.resnet50_module(out_2, 4, 128, 256, 512)
-        endpoints['block2'] = out_3
-    with tf.variable_scope("ResNetBlock3"):
-        out_4 = net.resnet50_module(out_3, 6, 256, 512, 1024)
-        endpoints['block3'] = out_4
-    with tf.variable_scope("ResNetBlock4"):
-        out_5 = net.resnet50_module(out_4, 3, 512, 1024, 2048)
-        endpoints['block4'] = out_5
+# Perform Detections on the Desired Blocks
+overall_predictions = []
+overall_anchors = []
+for index, layer in enumerate(net.feature_layers):
+    with tf.variable_scope("PredictionModule{}".format(index)):
+        overall_anchors.append(net.ssd_anchor_box_encoder(index))
+        overall_predictions.append(net.detection_layer(endpoints[layer], index))
 
-    # Perform Detections on the Desired Blocks
-    overall_predictions = []
-    overall_anchors = []
-    for index, layer in enumerate(net.feature_layers):
-        with tf.variable_scope("PredictionModule{}".format(index)):
-            overall_anchors.append(net.ssd_anchor_box_encoder(index))
-            overall_predictions.append(net.detection_layer(endpoints[layer], index))
+# [TODO]@BurakUzkent : Add a module to read the ground truth data for the given batch
+file_names = ['profile_picture.jpg']
+gt_bboxes = [[0.2, 0.2, 0.4, 0.4]]
+gt_bboxes = tf.constant(np.reshape(np.asarray(gt_bboxes, np.float32), (net.batch_size, 4)), tf.float32)
+gt_classes = tf.constant([1], tf.int64)
+train_batch, train_iterator = utils.create_tf_dataset(file_names, net.batch_size)
 
-    # [TODO]@BurakUzkent : Add a module to read the ground truth data for the given batch
-    file_names = ['/Users/buzkent/Downloads/profile_picture.jpg', '/Users/buzkent/Downloads/profile_picture.jpg',
-                '/Users/buzkent/Downloads/profile_picture.jpg', '/Users/buzkent/Downloads/profile_picture.jpg']
-    gt_bboxes = [[0.1, 0.1, 0.2, 0.2], [0.1, 0.1, 0.2, 0.2], [0.1, 0.1, 0.2, 0.2], [0.1, 0.1, 0.2, 0.2]]
-    gt_bboxes = tf.constant(np.reshape(np.asarray(gt_bboxes, np.float32), (net.batch_size, 4)))
-    gt_classes = tf.constant([1, 1, 1, 1], tf.int64)
-    train_batch, train_iterator = utils.create_tf_dataset(file_names, net.batch_size)
+# Construct the Loss Function and Define Optimizer
+total_loss = net.loss_function(gt_bboxes, gt_classes, overall_predictions, overall_anchors)
+optimizer = tf.train.AdamOptimizer(1e-4).minimize(total_loss)
 
-    total_loss = net.loss_function(gt_bboxes, gt_classes, overall_predictions, overall_anchors)
-    optimizer = tf.train.AdamOptimizer(1e-4).minimize(total_loss)
-
-    # Execute the graph
-    with tf.Session() as sess:
-        train_writer = tf.summary.FileWriter('./train', sess.graph)
-        sess.run(tf.global_variables_initializer())
-        sess.run(train_iterator.initializer)
-        for iteration_id in tqdm(range(net.number_iterations)):
-            _, loss_value = sess.run([optimizer, total_loss], feed_dict={x_train: train_batch.eval(session=sess)})
-            print("Loss at iteration {} : {}".format(iteration_id, loss_value))
+# Execute the graph
+with tf.Session() as sess:
+    train_writer = tf.summary.FileWriter('./train', sess.graph)
+    sess.run(tf.global_variables_initializer())
+    sess.run(train_iterator.initializer)
+    for iteration_id in range(net.number_iterations):
+        _, loss_value = sess.run([optimizer, total_loss], feed_dict={x_train: train_batch.eval(session=sess)})
+        print("Loss at iteration {} : {}".format(iteration_id, loss_value))
