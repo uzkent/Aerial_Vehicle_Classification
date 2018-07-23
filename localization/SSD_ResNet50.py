@@ -21,7 +21,7 @@ class SSDResNet50():
         self.feat_shapes = [[64, 64],[32, 32],[16, 16]]
         self.anchor_steps = [2, 4, 8]
         self.img_shape = [128, 128]
-        self.batch_size = 1
+        self.batch_size = 2
         self.number_iterations_dataset = 100
         self.buffer_size = 100
         self.positive_threshold = 0.6
@@ -150,9 +150,9 @@ class SSDResNet50():
                 target_labels_all.append(target_tensor[0])
                 target_localizations_all.append(target_tensor[1])
                 target_scores_all.append(target_tensor[2])
-            target_labels = tf.concat(target_labels_all, axis=1)
+            target_labels = tf.concat(target_labels_all, axis=-1)
             target_localizations = tf.stack(target_localizations_all)
-            target_scores = tf.stack(target_scores_all)
+            target_scores = tf.concat(target_scores_all, axis=-1)
            
             # Determine the Positive and Negative Samples
             pos_samples = tf.cast(target_scores > self.positive_threshold, tf.uint16)
@@ -163,24 +163,24 @@ class SSDResNet50():
             # [TODO]@BurakUzkent : Here we should limit the number of negative samples to 3*num_pos_samples
             target_labels_flattened = tf.reshape(target_labels, [-1])
             predictions_flattened = tf.reshape(predictions[0], [-1, self.number_classes])
-            pos_samples_flattened = tf.expand_dims(tf.to_float(tf.contrib.layers.flatten(pos_samples)), -1)
-            neg_samples_flattened = tf.expand_dims(tf.to_float(tf.contrib.layers.flatten(neg_samples)), -1)     
-         
+            pos_samples_flattened = tf.cast(tf.reshape(pos_samples, [-1]), tf.float32)
+            neg_samples_flattened = tf.cast(tf.reshape(neg_samples, [-1]), tf.float32)
             # Construct the loss function
             with tf.name_scope('cross_entropy_pos{}'.format(index)):
                 loss_pos = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
-                positives_only_loss = tf.reduce_sum(loss_pos * tf.contrib.layers.flatten(pos_samples_flattened))
+                positives_only_loss = tf.reduce_sum(loss_pos * pos_samples_flattened)
                 positives_only_loss = tf.Print(positives_only_loss, [positives_only_loss], "-> Positives Loss")
                 loss_classification_pos = tf.div(positives_only_loss, self.batch_size)
                        
             with tf.name_scope('cross_entropy_neg{}'.format(index)):
                 loss_neg = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
-                negatives_only_loss = tf.reduce_sum(loss_neg * tf.contrib.layers.flatten(neg_samples_flattened))
+                negatives_only_loss = tf.reduce_sum(loss_neg * neg_samples_flattened)
                 loss_classification_neg = tf.div(negatives_only_loss, self.batch_size * num_neg_samples)            
                 loss_classification_neg = tf.Print(loss_classification_neg, [loss_classification_neg], "-> Negatives Loss")
 
             with tf.name_scope('localization{}'.format(index)):
-                weights = tf.expand_dims(1.0 * tf.to_float(pos_samples), axis=-1)
+                weights = tf.expand_dims(1.0 * tf.to_float(tf.reshape(pos_samples, [self.batch_size, self.feat_shapes[index][0], 
+                self.feat_shapes[index][1], len(self.anchor_sizes[index]) * (len(self.anchor_ratios[index]) + 1)])), axis=-1)
                 loss = tf.abs(predictions[1] - target_localizations)
                 loss_localization = tf.div(tf.reduce_sum(loss * weights), self.batch_size)
                 loss_localization = tf.Print(loss_localization, [loss_localization], "-> Localization Loss")
@@ -217,10 +217,10 @@ for index, layer in enumerate(net.feature_layers):
         overall_predictions.append(net.detection_layer(endpoints[layer], index))
 
 # [TODO]@BurakUzkent : Add a module to read the ground truth data for the given batch
-file_names = ['profile_picture.jpg']
-gt_bboxes = [[0.2, 0.2, 0.4, 0.4]]
+file_names = ['profile_picture.jpg', 'profile_picture.jpg']
+gt_bboxes = [[0.2, 0.2, 0.4, 0.4], [0.2, 0.2, 0.4, 0.4]]
 gt_bboxes = tf.constant(np.reshape(np.asarray(gt_bboxes, np.float32), (net.batch_size, 4)), tf.float32)
-gt_classes = tf.constant([1], tf.int64)
+gt_classes = tf.constant([1, 1], tf.int64)
 train_batch, train_iterator = utils.create_tf_dataset(file_names, net.buffer_size, net.number_iterations_dataset, net.batch_size)
 
 # Construct the Loss Function and Define Optimizer
