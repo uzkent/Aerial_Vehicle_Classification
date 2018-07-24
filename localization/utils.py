@@ -188,16 +188,12 @@ def tf_ssd_bboxes_select_layer(predictions_layer, localizations_layer,
         size Batches X N x 1 | 4. Each key corresponding to a class.
     """
     select_threshold = 0.0 if select_threshold is None else select_threshold
-    with tf.name_scope(scope, 'ssd_bboxes_select_layer',
-                       [predictions_layer, localizations_layer]):
+    with tf.name_scope(scope, 'ssd_bboxes_select_layer', [predictions_layer, localizations_layer]):
         # Reshape features: Batches x N x N_labels | 4
         p_shape = get_shape(predictions_layer)
-        predictions_layer = tf.reshape(predictions_layer,
-                                       tf.stack([p_shape[0], -1, p_shape[-1]]))
+        predictions_layer = tf.reshape(predictions_layer, tf.stack([p_shape[0], -1, p_shape[-1]]))
         l_shape = get_shape(localizations_layer)
-        localizations_layer = tf.reshape(localizations_layer,
-                                         tf.stack([l_shape[0], -1, l_shape[-1]]))
-
+        localizations_layer = tf.reshape(localizations_layer, tf.stack([l_shape[0], -1, l_shape[-1]]))
         d_scores = {}
         d_bboxes = {}
         for c in range(0, num_classes):
@@ -283,7 +279,7 @@ def bboxes_sort(scores, bboxes, top_k=400, scope=None):
         def fn_gather(bboxes, idxes):
             bb = tf.gather(bboxes, idxes)
             return [bb]
-        r = tf.map_fn(lambda x: fn_gather(x[0], x[1]),
+        r = tf.map_fn(lambda x: fn_gather(x[0], x[1]), 
                       [bboxes, idxes],
                       dtype=[bboxes.dtype],
                       parallel_iterations=10,
@@ -387,7 +383,41 @@ def bboxes_nms_batch(scores, bboxes, nms_threshold=0.5, keep_top_k=200,
         scores, bboxes = r
         return scores, bboxes
 
-def decode_predictions(overall_predictions, overall_anchors,select_threshold=None, nms_threshold=0.5, clipping_bbox=None, top_k=400, keep_top_k=200, prior_scaling=[0.1, 0.1, 0.2, 0.2]):   
+def bboxes_clip(bbox_ref, bboxes, scope=None):
+    """Clip bounding boxes to a reference box.
+    Batch-compatible if the first dimension of `bbox_ref` and `bboxes`
+    can be broadcasted.
+    Args:
+      bbox_ref: Reference bounding box. Nx4 or 4 shaped-Tensor;
+      bboxes: Bounding boxes to clip. Nx4 or 4 shaped-Tensor or dictionary.
+    Return:
+      Clipped bboxes.
+    """
+    # Bboxes is dictionary.
+    if isinstance(bboxes, dict):
+        with tf.name_scope(scope, 'bboxes_clip_dict'):
+            d_bboxes = {}
+            for c in bboxes.keys():
+                d_bboxes[c] = bboxes_clip(bbox_ref, bboxes[c])
+            return d_bboxes
+
+    # Tensors inputs.
+    with tf.name_scope(scope, 'bboxes_clip'):
+        # Easier with transposed bboxes. Especially for broadcasting.
+        bbox_ref = tf.transpose(bbox_ref)
+        bboxes = tf.transpose(bboxes)
+        # Intersection bboxes and reference bbox.
+        ymin = tf.maximum(bboxes[0], bbox_ref[0])
+        xmin = tf.maximum(bboxes[1], bbox_ref[1])
+        ymax = tf.minimum(bboxes[2], bbox_ref[2])
+        xmax = tf.minimum(bboxes[3], bbox_ref[3])
+        # Double check! Empty boxes when no-intersection.
+        ymin = tf.minimum(ymin, ymax)
+        xmin = tf.minimum(xmin, xmax)
+        bboxes = tf.transpose(tf.stack([ymin, xmin, ymax, xmax], axis=0))
+        return bboxes
+
+def decode_predictions(overall_predictions, overall_anchors, clipping_bbox=None, select_threshold=None, nms_threshold=0.5, top_k=400, keep_top_k=200, prior_scaling=[0.1, 0.1, 0.2, 0.2]):   
     """ Decode the boxes given by the network back to the image domain """
     bboxes = []
     for index, (predictions, anchors) in enumerate(zip(overall_predictions, overall_anchors)):
@@ -408,6 +438,8 @@ def decode_predictions(overall_predictions, overall_anchors,select_threshold=Non
     rscores, rbboxes = bboxes_sort(rscores, rbboxes, top_k=top_k)
 
     rscores, rbboxes = bboxes_nms_batch(rscores, rbboxes, nms_threshold=nms_threshold, keep_top_k=keep_top_k)
+
+    rbboxes = bboxes_clip(clipping_bbox, rbboxes)
 
     return rscores, rbboxes
 

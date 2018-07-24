@@ -12,7 +12,7 @@ class SSDResNet50():
     def __init__(self):
         """ Constructor for the SSD-ResNet50 Model """
         self.number_classes = 2 # +1 for background class
-        self.number_iterations = 500
+        self.number_iterations = 10
         self.anchor_sizes = [(15.,30.),
                       (45., 60.),
                       (75., 90.)]
@@ -256,7 +256,7 @@ merged = tf.summary.merge_all()
 saver = tf.train.Saver()
 
 # Decode predictions to the image domain
-eval_scores, eval_bboxes = utils.decode_predictions(overall_predictions, overall_anchors)
+eval_scores, eval_bboxes = utils.decode_predictions(overall_predictions, overall_anchors, tf.constant([0, 0, 1, 1], tf.float32))
 
 # Execute the graph
 with tf.Session() as sess:
@@ -264,13 +264,11 @@ with tf.Session() as sess:
     sess.run(tf.global_variables_initializer())
     sess.run(train_iterator.initializer)
     for iteration_id in range(net.number_iterations):
-        pdb.set_trace()
         summary, _, loss_value, pos_loss_value, neg_loss_value, loc_loss_value = sess.run([merged, optimizer, total_loss, positives_loss, negatives_loss, localization_loss], feed_dict={x_train: train_batch.eval(session=sess)})
         print("Loss at iteration {} : {}".format(iteration_id, loss_value))
         if iteration_id % 25 == 0:
             train_writer.add_summary(summary, iteration_id)
 
     # Evaluate it on the validation dataset
-    pdb.set_trace()
     detection_scores, detection_bboxes = sess.run([eval_scores, eval_bboxes], feed_dict={x_train: train_batch.eval(session=sess)})
     print(detection_scores, detection_bboxes)
