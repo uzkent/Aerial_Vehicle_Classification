@@ -3,6 +3,7 @@ import numpy as np
 import utils
 import pdb
 import math
+import logging
 
 class SSDResNet50():
     """ This class contains the components of the ResNet50 Architecture """
@@ -11,7 +12,7 @@ class SSDResNet50():
     def __init__(self):
         """ Constructor for the SSD-ResNet50 Model """
         self.number_classes = 2 # +1 for background class
-        self.number_iterations = 1000
+        self.number_iterations = 10
         self.anchor_sizes = [(15.,30.),
                       (45., 60.),
                       (75., 90.)]
@@ -252,6 +253,10 @@ tf.summary.scalar('positives_loss', positives_loss)
 tf.summary.scalar('negatives_loss', negatives_loss)
 tf.summary.scalar('localization_loss', localization_loss)
 merged = tf.summary.merge_all()
+saver = tf.train.Saver()
+
+# Decode predictions to the image domain
+eval_scores, eval_bboxes = utils.decode_predictions(overall_predictions, overall_anchors)
 
 # Execute the graph
 with tf.Session() as sess:
