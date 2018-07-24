@@ -476,3 +476,9 @@ def tensor_shape(x, rank=3):
         dynamic_shape = tf.unstack(tf.shape(x), rank)
         return [s if s is not None else d
                 for s, d in zip(static_shape, dynamic_shape)]
+
+def overlay_bboxes(detection_scores, detection_bboxes, tf_image):
+    """ This function draws the bounding boxes on a batch of images """
+    tf_image_overlaid  = tf.image.draw_bounding_boxes(tf_image, detection_bboxes, name="overlay_bboxes")
+
+    return tf_image_overlaid

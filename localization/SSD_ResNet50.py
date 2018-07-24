@@ -12,7 +12,7 @@ class SSDResNet50():
     def __init__(self):
         """ Constructor for the SSD-ResNet50 Model """
         self.number_classes = 2 # +1 for background class
-        self.number_iterations = 10
+        self.number_iterations = 500
         self.anchor_sizes = [(15.,30.),
                       (45., 60.),
                       (75., 90.)]
@@ -240,7 +240,7 @@ for index, layer in enumerate(net.feature_layers):
 
 # [TODO]@BurakUzkent : Add a module to read the ground truth data for the given batch
 file_names = ['profile_picture.jpg', 'profile_picture.jpg']
-gt_bboxes = [[0.25, 0.0, 0.75, 0.7], [0.25, 0.0, 0.75, 0.7]]
+gt_bboxes = [[0.0, 0.25, 0.7, 0.75], [0.0, 0.25, 0.7, 0.75]]
 gt_bboxes = tf.constant(np.reshape(np.asarray(gt_bboxes, np.float32), (net.batch_size, 4)), tf.float32)
 gt_classes = tf.constant([1, 1], tf.int64)
 train_batch, train_iterator = utils.create_tf_dataset(file_names, net.buffer_size, net.number_iterations_dataset, net.batch_size)
@@ -252,11 +252,14 @@ tf.summary.scalar('total_loss', total_loss)
 tf.summary.scalar('positives_loss', positives_loss)
 tf.summary.scalar('negatives_loss', negatives_loss)
 tf.summary.scalar('localization_loss', localization_loss)
-merged = tf.summary.merge_all()
-saver = tf.train.Saver()
 
 # Decode predictions to the image domain
 eval_scores, eval_bboxes = utils.decode_predictions(overall_predictions, overall_anchors, tf.constant([0, 0, 1, 1], tf.float32))
+
+# Overlay the bounding boxes on the images
+tf_image_overlaid = utils.overlay_bboxes(eval_scores[1], eval_bboxes[1], x_train)
+tf.summary.image("Detected Bounding Boxes", tf_image_overlaid, max_outputs = 20) 
+merged = tf.summary.merge_all()
 
 # Execute the graph
 with tf.Session() as sess:
@@ -271,4 +274,3 @@ with tf.Session() as sess:
 
     # Evaluate it on the validation dataset
     detection_scores, detection_bboxes = sess.run([eval_scores, eval_bboxes], feed_dict={x_train: train_batch.eval(session=sess)})
-    print(detection_scores, detection_bboxes)
