@@ -12,9 +12,9 @@ class SSDResNet50():
         """ Constructor for the SSD-ResNet50 Model """
         self.number_classes = 2 # +1 for background class
         self.number_iterations = 1000
-        self.anchor_sizes = [(25.,50.),
-                      (45., 99.),
-                      (99., 153.)]
+        self.anchor_sizes = [(15.,30.),
+                      (45., 60.),
+                      (75., 90.)]
         self.anchor_ratios = [[2, .5],
                         [2, .5],
                         [2, .5]]
@@ -22,19 +22,33 @@ class SSDResNet50():
         self.anchor_steps = [2, 4, 8]
         self.img_shape = [128, 128]
         self.batch_size = 2
-        self.number_iterations_dataset = 100
+        self.number_iterations_dataset = 1000
         self.buffer_size = 100
-        self.positive_threshold = 0.6
+        self.positive_threshold = 0.5
         self.negative_threshold = 0.3
+
+    def variable_summaries(self, var):
+        """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
+        with tf.name_scope('summaries'):
+            mean = tf.reduce_mean(var)
+            tf.summary.scalar('mean', mean)
+            with tf.name_scope('stddev'):
+              stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+            tf.summary.scalar('stddev', stddev)
+            tf.summary.scalar('max', tf.reduce_max(var))
+            tf.summary.scalar('min', tf.reduce_min(var))
+            tf.summary.histogram('histogram', var)
 
     def weight_variable(self, shape, filter_name):
         """ Define the Weights and Initialize Them and Attach to the Summary """
         weights = tf.get_variable(filter_name, shape=shape, initializer=tf.contrib.layers.xavier_initializer())
+        self.variable_summaries(weights)
         return weights
 
     def bias_variable(self, shape, bias_name):
         """ Define the Biases and Initialize Them and Attach to the Summary """
         bias = tf.get_variable(bias_name, shape=shape, initializer=tf.contrib.layers.xavier_initializer())
+        self.variable_summaries(bias)
         return bias
 
     def _conv2d(self, input_data, shape, bias_shape, stride, filter_id, padding='SAME'):
@@ -141,6 +155,9 @@ class SSDResNet50():
     def loss_function(self, gt_localizations, gt_classes, overall_predictions, overall_anchors):
         """ Define the loss function for SSD - Classification + Localization """
         overall_loss = 0
+        positive_loss = 0
+        negative_loss = 0
+        loc_loss = 0 
         for index, (predictions, anchors) in enumerate(zip(overall_predictions, overall_anchors)):
             target_labels_all = []
             target_localizations_all = []
@@ -153,7 +170,8 @@ class SSDResNet50():
             target_labels = tf.concat(target_labels_all, axis=-1)
             target_localizations = tf.stack(target_localizations_all)
             target_scores = tf.concat(target_scores_all, axis=-1)
-           
+            target_scores = tf.Print(target_scores, [tf.reduce_max(target_scores)])
+
             # Determine the Positive and Negative Samples
             pos_samples = tf.cast(target_scores > self.positive_threshold, tf.uint16)
             num_pos_samples = tf.reduce_sum(pos_samples)
@@ -165,6 +183,7 @@ class SSDResNet50():
             predictions_flattened = tf.reshape(predictions[0], [-1, self.number_classes])
             pos_samples_flattened = tf.cast(tf.reshape(pos_samples, [-1]), tf.float32)
             neg_samples_flattened = tf.cast(tf.reshape(neg_samples, [-1]), tf.float32)
+
             # Construct the loss function
             with tf.name_scope('cross_entropy_pos{}'.format(index)):
                 loss_pos = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
@@ -186,8 +205,10 @@ class SSDResNet50():
                 loss_localization = tf.Print(loss_localization, [loss_localization], "-> Localization Loss")
 
             overall_loss += loss_classification_pos + loss_classification_neg + loss_localization
-
-        return overall_loss
+            positive_loss += loss_classification_pos
+            negative_loss += loss_classification_neg
+            loc_loss += loss_localization
+        return overall_loss, positive_loss, negative_loss, loc_loss
 
 # Construct the Graph
 net = SSDResNet50()
@@ -218,14 +239,19 @@ for index, layer in enumerate(net.feature_layers):
 
 # [TODO]@BurakUzkent : Add a module to read the ground truth data for the given batch
 file_names = ['profile_picture.jpg', 'profile_picture.jpg']
-gt_bboxes = [[0.2, 0.2, 0.4, 0.4], [0.2, 0.2, 0.4, 0.4]]
+gt_bboxes = [[0.25, 0.0, 0.75, 0.7], [0.25, 0.0, 0.75, 0.7]]
 gt_bboxes = tf.constant(np.reshape(np.asarray(gt_bboxes, np.float32), (net.batch_size, 4)), tf.float32)
 gt_classes = tf.constant([1, 1], tf.int64)
 train_batch, train_iterator = utils.create_tf_dataset(file_names, net.buffer_size, net.number_iterations_dataset, net.batch_size)
 
 # Construct the Loss Function and Define Optimizer
-total_loss = net.loss_function(gt_bboxes, gt_classes, overall_predictions, overall_anchors)
+total_loss, positives_loss, negatives_loss, localization_loss = net.loss_function(gt_bboxes, gt_classes, overall_predictions, overall_anchors)
 optimizer = tf.train.AdamOptimizer(1e-4).minimize(total_loss)
+tf.summary.scalar('total_loss', total_loss)
+tf.summary.scalar('positives_loss', positives_loss)
+tf.summary.scalar('negatives_loss', negatives_loss)
+tf.summary.scalar('localization_loss', localization_loss)
+merged = tf.summary.merge_all()
 
 # Execute the graph
 with tf.Session() as sess:
@@ -233,5 +259,7 @@ with tf.Session() as sess:
     sess.run(tf.global_variables_initializer())
     sess.run(train_iterator.initializer)
     for iteration_id in range(net.number_iterations):
-        _, loss_value = sess.run([optimizer, total_loss], feed_dict={x_train: train_batch.eval(session=sess)})
+        summary, _, loss_value, pos_loss_value, neg_loss_value, loc_loss_value = sess.run([merged, optimizer, total_loss, positives_loss, negatives_loss, localization_loss], feed_dict={x_train: train_batch.eval(session=sess)})
         print("Loss at iteration {} : {}".format(iteration_id, loss_value))
+        if iteration_id % 25 == 0:
+            train_writer.add_summary(summary, iteration_id)
