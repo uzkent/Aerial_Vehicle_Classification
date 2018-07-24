@@ -148,6 +148,29 @@ def ssd_bboxes_encode_layer(labels,
     feat_localizations = tf.stack([feat_cx, feat_cy, feat_w, feat_h], axis=-1)
     return feat_labels, feat_localizations, feat_scores
 
+def get_shape(x, rank=None):
+    """Returns the dimensions of a Tensor as list of integers or scale tensors.
+    Args:
+      x: N-d Tensor;
+      rank: Rank of the Tensor. If None, will try to guess it.
+    Returns:
+      A list of `[d1, d2, ..., dN]` corresponding to the dimensions of the
+        input tensor.  Dimensions that are statically known are python integers,
+        otherwise they are integer scalar tensors.
+    """
+    if x.get_shape().is_fully_defined():
+        return x.get_shape().as_list()
+    else:
+        static_shape = x.get_shape()
+        if rank is None:
+            static_shape = static_shape.as_list()
+            rank = len(static_shape)
+        else:
+            static_shape = x.get_shape().with_rank(rank).as_list()
+        dynamic_shape = tf.unstack(tf.shape(x), rank)
+        return [s if s is not None else d
+                for s, d in zip(static_shape, dynamic_shape)]
+
 def tf_ssd_bboxes_select_layer(predictions_layer, localizations_layer,
                                select_threshold=None,
                                num_classes=21,
@@ -168,10 +191,10 @@ def tf_ssd_bboxes_select_layer(predictions_layer, localizations_layer,
     with tf.name_scope(scope, 'ssd_bboxes_select_layer',
                        [predictions_layer, localizations_layer]):
         # Reshape features: Batches x N x N_labels | 4
-        p_shape = tfe.get_shape(predictions_layer)
+        p_shape = get_shape(predictions_layer)
         predictions_layer = tf.reshape(predictions_layer,
                                        tf.stack([p_shape[0], -1, p_shape[-1]]))
-        l_shape = tfe.get_shape(localizations_layer)
+        l_shape = get_shape(localizations_layer)
         localizations_layer = tf.reshape(localizations_layer,
                                          tf.stack([l_shape[0], -1, l_shape[-1]]))
 
@@ -270,6 +293,59 @@ def bboxes_sort(scores, bboxes, top_k=400, scope=None):
         bboxes = r[0]
         return scores, bboxes
 
+def pad_axis(x, offset, size, axis=0, name=None):
+    """Pad a tensor on an axis, with a given offset and output size.
+    The tensor is padded with zero (i.e. CONSTANT mode). Note that the if the
+    `size` is smaller than existing size + `offset`, the output tensor
+    was the latter dimension.
+    Args:
+      x: Tensor to pad;
+      offset: Offset to add on the dimension chosen;
+      size: Final size of the dimension.
+    Return:
+      Padded tensor whose dimension on `axis` is `size`, or greater if
+      the input vector was larger.
+    """
+    with tf.name_scope(name, 'pad_axis'):
+        shape = get_shape(x)
+        rank = len(shape)
+        # Padding description.
+        new_size = tf.maximum(size-offset-shape[axis], 0)
+        pad1 = tf.stack([0]*axis + [offset] + [0]*(rank-axis-1))
+        pad2 = tf.stack([0]*axis + [new_size] + [0]*(rank-axis-1))
+        paddings = tf.stack([pad1, pad2], axis=1)
+        x = tf.pad(x, paddings, mode='CONSTANT')
+        # Reshape, to get fully defined shape if possible.
+        # TODO: fix with tf.slice
+        shape[axis] = size
+        x = tf.reshape(x, tf.stack(shape))
+        return x
+
+def bboxes_nms(scores, bboxes, nms_threshold=0.5, keep_top_k=200, scope=None):
+    """Apply non-maximum selection to bounding boxes. In comparison to TF
+    implementation, use classes information for matching.
+    Should only be used on single-entries. Use batch version otherwise.
+    Args:
+      scores: N Tensor containing float scores.
+      bboxes: N x 4 Tensor containing boxes coordinates.
+      nms_threshold: Matching threshold in NMS algorithm;
+      keep_top_k: Number of total object to keep after NMS.
+    Return:
+      classes, scores, bboxes Tensors, sorted by score.
+        Padded with zero if necessary.
+    """
+    with tf.name_scope(scope, 'bboxes_nms_single', [scores, bboxes]):
+        # Apply NMS algorithm.
+        idxes = tf.image.non_max_suppression(bboxes, scores,
+                                             keep_top_k, nms_threshold)
+        scores = tf.gather(scores, idxes)
+        bboxes = tf.gather(bboxes, idxes)
+        # Pad results.
+        scores = pad_axis(scores, 0, keep_top_k, axis=0)
+        bboxes = pad_axis(bboxes, 0, keep_top_k, axis=0)
+        return scores, bboxes
+
+
 def bboxes_nms_batch(scores, bboxes, nms_threshold=0.5, keep_top_k=200,
                      scope=None):
     """Apply non-maximum selection to bounding boxes. In comparison to TF
@@ -311,20 +387,20 @@ def bboxes_nms_batch(scores, bboxes, nms_threshold=0.5, keep_top_k=200,
         scores, bboxes = r
         return scores, bboxes
 
-def decode_predictions(overall_predictions, overall_anchors,select_threshold=None, nms_threshold=0.5, clipping_bbox=None, top_k=400, keep_top_k=200)
+def decode_predictions(overall_predictions, overall_anchors,select_threshold=None, nms_threshold=0.5, clipping_bbox=None, top_k=400, keep_top_k=200, prior_scaling=[0.1, 0.1, 0.2, 0.2]):   
     """ Decode the boxes given by the network back to the image domain """
     bboxes = []
     for index, (predictions, anchors) in enumerate(zip(overall_predictions, overall_anchors)):
-	yref, xref, href, wref = anchors_layer    
-	pred_cx = predictions[:, :, :, :, 0] * wref * prior_scaling[0] + xref
-	pred_cy = predictions[:, :, :, :, 1] * href * prior_scaling[1] + yref
-	pred_w = wref * tf.exp(predictions[:, :, :, :, 2] * prior_scaling[2]
-	pred_y = href * tf.exp(predictions[:, :, :, :, 3] * prior_scaling[3]
+        yref, xref, href, wref = anchors
+        pred_cx = predictions[1][:, :, :, :, 0] * wref * prior_scaling[0] + xref
+        pred_cy = predictions[1][:, :, :, :, 1] * href * prior_scaling[1] + yref
+        pred_w = wref * tf.exp(predictions[1][:, :, :, :, 2] * prior_scaling[2])
+        pred_h = href * tf.exp(predictions[1][:, :, :, :, 3] * prior_scaling[3])
 	
-	xmin = pred_cx - pred_w / 2.
-	ymin = pred_cy - pred_h / 2.
-	xmax = pred_cx + pred_w / 2.
-	ymax = pred_cy + pred_h / 2.
+        xmin = pred_cx - pred_w / 2.
+        ymin = pred_cy - pred_h / 2.
+        xmax = pred_cx + pred_w / 2.
+        ymax = pred_cy + pred_h / 2.
         bboxes.append(tf.stack([xmin, ymin, xmax, ymax], axis=-1))
 
     rscores, rbboxes = tf_ssd_bboxes_select(overall_predictions, bboxes)    
