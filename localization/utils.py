@@ -173,7 +173,7 @@ def get_shape(x, rank=None):
 
 def tf_ssd_bboxes_select_layer(predictions_layer, localizations_layer,
                                select_threshold=None,
-                               num_classes=21,
+                               num_classes=2,
                                ignore_class=0,
                                scope=None):
     """Extract classes, scores and bounding boxes from features in one layer.
@@ -431,7 +431,7 @@ def decode_predictions(overall_predictions, overall_anchors, clipping_bbox=None,
         ymin = pred_cy - pred_h / 2.
         xmax = pred_cx + pred_w / 2.
         ymax = pred_cy + pred_h / 2.
-        bboxes.append(tf.stack([xmin, ymin, xmax, ymax], axis=-1))
+        bboxes.append(tf.stack([ymin, xmin, ymax, xmax], axis=-1))
 
     rscores, rbboxes = tf_ssd_bboxes_select(overall_predictions, bboxes)    
 
