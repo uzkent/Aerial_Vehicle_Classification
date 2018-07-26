@@ -1,6 +1,7 @@
 import tensorflow as tf
 import numpy as np
 import math
+import pdb
 
 import utils
 
@@ -12,9 +13,9 @@ class SSDResNet50():
         """ Constructor for the SSD-ResNet50 Model """
         self.number_classes = 2 # +1 for background class
         self.number_iterations = 10000
-        self.anchor_sizes = [(15.,30.),
-                      (45., 60.),
-                      (75., 90.)]
+        self.anchor_sizes = [(10., 20., 30.),
+                      (40., 50., 60.),
+                      (70., 80., 90.)]
         self.anchor_ratios = [[2, .5],
                         [2, .5],
                         [2, .5]]
@@ -22,7 +23,7 @@ class SSDResNet50():
         self.anchor_steps = [2, 4, 8]
         self.img_shape = [128, 128]
         self.batch_size = 2
-        self.number_iterations_dataset = 1000
+        self.number_iterations_dataset = 10000
         self.buffer_size = 100
         self.positive_threshold = 0.5
         self.negative_threshold = 0.3
@@ -117,15 +118,13 @@ class SSDResNet50():
         w = np.zeros((num_anchors, ), dtype=dtype)
 
         # Add first anchor boxes with ratio=1.
-        anchor_counter = 0
         for temp_index in range(len(self.anchor_sizes[index])):
-            anchor_index = temp_index*(anchor_counter*(len(self.anchor_ratios[index])+1))
+            anchor_index = temp_index*(len(self.anchor_ratios[index])+1)
             h[anchor_index] = self.anchor_sizes[index][temp_index] / self.img_shape[0]
             w[anchor_index] = self.anchor_sizes[index][temp_index] / self.img_shape[1]
             for i, r in enumerate(self.anchor_ratios[index]):
                 h[anchor_index+i+1] = self.anchor_sizes[index][temp_index] / self.img_shape[0] / math.sqrt(float(r))
                 w[anchor_index+i+1] = self.anchor_sizes[index][temp_index] / self.img_shape[1] * math.sqrt(float(r))
-            anchor_counter += 1
 
         return y, x, h, w
 
@@ -177,33 +176,10 @@ class SSDResNet50():
             neg_samples = tf.cast(target_scores < self.negative_threshold, tf.float32)
             num_neg_samples = tf.reduce_sum(neg_samples)
 
-            # Negative hard-mining is done by considering the 3*num_pos_samples negative predictions with the highest confidence score
-            # [TODO] @BurakUzkent : Apply negative hard mining
             target_labels_flattened = tf.reshape(target_labels, [-1])
             predictions_flattened = tf.reshape(predictions[0], [-1, self.number_classes])
             pos_samples_flattened = tf.cast(tf.reshape(pos_samples, [-1]), tf.float32)
             neg_samples_flattened = tf.cast(tf.reshape(neg_samples, [-1]), tf.float32)
-
-            # Hard negative mining
-            no_classes = tf.cast(pmask, tf.int32)
-            predictions = slim.softmax(logits)
-            nmask = tf.logical_and(tf.logical_not(pmask),
-                                   gscores > -0.5)
-            fnmask = tf.cast(nmask, dtype)
-            nvalues = tf.where(nmask,
-                               predictions[:, 0],
-                               1. - fnmask)
-            nvalues_flat = tf.reshape(nvalues, [-1])
-            # Number of negative entries to select
-            max_neg_entries = tf.cast(tf.reduce_sum(fnmask), tf.int32)
-            n_neg = tf.cast(negative_ratio * n_positives, tf.int32) + batch_size
-            n_neg = tf.minimum(n_neg, max_neg_entries)
-
-            val, idxes = tf.nn.top_k(-nvalues_flat, k=n_neg)
-            max_hard_pred = -val[-1]
-            # Final negative mask
-            nmask = tf.logical_and(nmask, nvalues < max_hard_pred)
-            fnmask = tf.cast(nmask, dtype)
 
             # Construct the loss function
             with tf.name_scope('cross_entropy_pos{}'.format(index)):
@@ -214,7 +190,11 @@ class SSDResNet50():
 
             with tf.name_scope('cross_entropy_neg{}'.format(index)):
                 loss_neg = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
-                negatives_only_loss = tf.reduce_sum(loss_neg * neg_samples_flattened)
+                if num_pos_samples == 0:
+                    _, indices_hnm = tf.nn.top_k(loss_neg * neg_samples_flattened, tf.cast(10 * 3, tf.int32), name='hard_negative_mining')
+                else:
+                    _, indices_hnm = tf.nn.top_k(loss_neg * neg_samples_flattened, tf.cast(num_pos_samples * 3, tf.int32), name='hard_negative_mining')
+                negatives_only_loss = tf.reduce_sum(tf.gather(loss_neg, indices_hnm))
                 loss_classification_neg = tf.div(negatives_only_loss, self.batch_size * num_neg_samples)
                 loss_classification_neg = tf.Print(loss_classification_neg, [loss_classification_neg], "-> Negatives Loss")
 
@@ -267,7 +247,7 @@ train_batch, train_iterator = utils.create_tf_dataset(file_names, net.buffer_siz
 
 # Construct the Loss Function and Define Optimizer
 total_loss, positives_loss, negatives_loss, localization_loss = net.loss_function(gt_bboxes, gt_classes, overall_predictions, overall_anchors)
-optimizer = tf.train.AdamOptimizer(1e-4).minimize(total_loss)
+optimizer = tf.train.AdamOptimizer(1e-3).minimize(total_loss)
 tf.summary.scalar('total_loss', total_loss)
 tf.summary.scalar('positives_loss', positives_loss)
 tf.summary.scalar('negatives_loss', negatives_loss)

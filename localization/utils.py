@@ -169,7 +169,7 @@ def get_shape(x, rank=None):
                 for s, d in zip(static_shape, dynamic_shape)]
 
 def tf_ssd_bboxes_select_layer(predictions_layer, localizations_layer,
-                               select_threshold=None,
+                               select_threshold=0.75,
                                num_classes=2,
                                ignore_class=0,
                                scope=None):
