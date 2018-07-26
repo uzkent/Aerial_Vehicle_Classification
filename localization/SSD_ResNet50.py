@@ -184,6 +184,27 @@ class SSDResNet50():
             pos_samples_flattened = tf.cast(tf.reshape(pos_samples, [-1]), tf.float32)
             neg_samples_flattened = tf.cast(tf.reshape(neg_samples, [-1]), tf.float32)
 
+            # Hard negative mining
+            no_classes = tf.cast(pmask, tf.int32)
+            predictions = slim.softmax(logits)
+            nmask = tf.logical_and(tf.logical_not(pmask),
+                                   gscores > -0.5)
+            fnmask = tf.cast(nmask, dtype)
+            nvalues = tf.where(nmask,
+                               predictions[:, 0],
+                               1. - fnmask)
+            nvalues_flat = tf.reshape(nvalues, [-1])
+            # Number of negative entries to select
+            max_neg_entries = tf.cast(tf.reduce_sum(fnmask), tf.int32)
+            n_neg = tf.cast(negative_ratio * n_positives, tf.int32) + batch_size
+            n_neg = tf.minimum(n_neg, max_neg_entries)
+
+            val, idxes = tf.nn.top_k(-nvalues_flat, k=n_neg)
+            max_hard_pred = -val[-1]
+            # Final negative mask
+            nmask = tf.logical_and(nmask, nvalues < max_hard_pred)
+            fnmask = tf.cast(nmask, dtype)
+
             # Construct the loss function
             with tf.name_scope('cross_entropy_pos{}'.format(index)):
                 loss_pos = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
