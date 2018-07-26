@@ -1,5 +1,4 @@
 import tensorflow as tf
-import pdb
 
 def parse_function(filename):
     """ Reads an image from a file, decodes it into a dense tensor, and resizes it
@@ -108,12 +107,10 @@ def ssd_bboxes_encode_layer(labels,
         # Mask: check threshold + scores + no annotations + num_classes.
         mask = tf.greater(jaccard, feat_scores)
         mask = tf.logical_and(mask, feat_scores > -0.5)
-
-        # [TODO] : Fix the following line
         mask = tf.logical_and(mask, label < num_classes)
         imask = tf.cast(mask, tf.int64)
         fmask = tf.cast(mask, dtype)
-        
+
         # Update values using mask.
         feat_labels = imask * label + (1 - imask) * feat_labels
         feat_scores = tf.where(mask, jaccard, feat_scores)
@@ -279,7 +276,7 @@ def bboxes_sort(scores, bboxes, top_k=400, scope=None):
         def fn_gather(bboxes, idxes):
             bb = tf.gather(bboxes, idxes)
             return [bb]
-        r = tf.map_fn(lambda x: fn_gather(x[0], x[1]), 
+        r = tf.map_fn(lambda x: fn_gather(x[0], x[1]),
                       [bboxes, idxes],
                       dtype=[bboxes.dtype],
                       parallel_iterations=10,
@@ -417,7 +414,7 @@ def bboxes_clip(bbox_ref, bboxes, scope=None):
         bboxes = tf.transpose(tf.stack([ymin, xmin, ymax, xmax], axis=0))
         return bboxes
 
-def decode_predictions(overall_predictions, overall_anchors, clipping_bbox=None, select_threshold=None, nms_threshold=0.5, top_k=400, keep_top_k=200, prior_scaling=[0.1, 0.1, 0.2, 0.2]):   
+def decode_predictions(overall_predictions, overall_anchors, clipping_bbox=None, select_threshold=None, nms_threshold=0.5, top_k=400, keep_top_k=200, prior_scaling=[0.1, 0.1, 0.2, 0.2]):
     """ Decode the boxes given by the network back to the image domain """
     bboxes = []
     for index, (predictions, anchors) in enumerate(zip(overall_predictions, overall_anchors)):
@@ -426,21 +423,17 @@ def decode_predictions(overall_predictions, overall_anchors, clipping_bbox=None,
         pred_cy = predictions[1][:, :, :, :, 1] * href * prior_scaling[1] + yref
         pred_w = wref * tf.exp(predictions[1][:, :, :, :, 2] * prior_scaling[2])
         pred_h = href * tf.exp(predictions[1][:, :, :, :, 3] * prior_scaling[3])
-	
+
         xmin = pred_cx - pred_w / 2.
         ymin = pred_cy - pred_h / 2.
         xmax = pred_cx + pred_w / 2.
         ymax = pred_cy + pred_h / 2.
         bboxes.append(tf.stack([ymin, xmin, ymax, xmax], axis=-1))
 
-    rscores, rbboxes = tf_ssd_bboxes_select(overall_predictions, bboxes)    
-
+    rscores, rbboxes = tf_ssd_bboxes_select(overall_predictions, bboxes)
     rscores, rbboxes = bboxes_sort(rscores, rbboxes, top_k=top_k)
-
     rscores, rbboxes = bboxes_nms_batch(rscores, rbboxes, nms_threshold=nms_threshold, keep_top_k=keep_top_k)
-
     rbboxes = bboxes_clip(clipping_bbox, rbboxes)
-
     return rscores, rbboxes
 
 def channel_to_last(inputs,

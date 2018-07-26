@@ -1,9 +1,8 @@
 import tensorflow as tf
 import numpy as np
-import utils
-import pdb
 import math
-import logging
+
+import utils
 
 class SSDResNet50():
     """ This class contains the components of the ResNet50 Architecture """
@@ -127,7 +126,7 @@ class SSDResNet50():
                 h[anchor_index+i+1] = self.anchor_sizes[index][temp_index] / self.img_shape[0] / math.sqrt(float(r))
                 w[anchor_index+i+1] = self.anchor_sizes[index][temp_index] / self.img_shape[1] * math.sqrt(float(r))
             anchor_counter += 1
- 
+
         return y, x, h, w
 
     def detection_layer(self, inputs, index):
@@ -158,7 +157,7 @@ class SSDResNet50():
         overall_loss = 0
         positive_loss = 0
         negative_loss = 0
-        loc_loss = 0 
+        loc_loss = 0
         for index, (predictions, anchors) in enumerate(zip(overall_predictions, overall_anchors)):
             target_labels_all = []
             target_localizations_all = []
@@ -177,8 +176,9 @@ class SSDResNet50():
             num_pos_samples = tf.reduce_sum(pos_samples)
             neg_samples = tf.cast(target_scores < self.negative_threshold, tf.float32)
             num_neg_samples = tf.reduce_sum(neg_samples)
-             
-            # [TODO]@BurakUzkent : Here we should limit the number of negative samples to 3*num_pos_samples
+
+            # Negative hard-mining is done by considering the 3*num_pos_samples negative predictions with the highest confidence score
+            # [TODO] @BurakUzkent : Apply negative hard mining
             target_labels_flattened = tf.reshape(target_labels, [-1])
             predictions_flattened = tf.reshape(predictions[0], [-1, self.number_classes])
             pos_samples_flattened = tf.cast(tf.reshape(pos_samples, [-1]), tf.float32)
@@ -190,15 +190,15 @@ class SSDResNet50():
                 positives_only_loss = tf.reduce_sum(loss_pos * pos_samples_flattened)
                 positives_only_loss = tf.Print(positives_only_loss, [positives_only_loss], "-> Positives Loss")
                 loss_classification_pos = tf.div(positives_only_loss, self.batch_size)
-                       
+
             with tf.name_scope('cross_entropy_neg{}'.format(index)):
                 loss_neg = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
                 negatives_only_loss = tf.reduce_sum(loss_neg * neg_samples_flattened)
-                loss_classification_neg = tf.div(negatives_only_loss, self.batch_size * num_neg_samples)     
+                loss_classification_neg = tf.div(negatives_only_loss, self.batch_size * num_neg_samples)
                 loss_classification_neg = tf.Print(loss_classification_neg, [loss_classification_neg], "-> Negatives Loss")
 
             with tf.name_scope('localization{}'.format(index)):
-                weights = tf.expand_dims(1.0 * tf.to_float(tf.reshape(pos_samples, [self.batch_size, self.feat_shapes[index][0], 
+                weights = tf.expand_dims(1.0 * tf.to_float(tf.reshape(pos_samples, [self.batch_size, self.feat_shapes[index][0],
                 self.feat_shapes[index][1], len(self.anchor_sizes[index]) * (len(self.anchor_ratios[index]) + 1)])), axis=-1)
                 loss = tf.abs(predictions[1] - target_localizations)
                 loss_localization = tf.div(tf.reduce_sum(loss * weights), self.batch_size)
@@ -237,7 +237,7 @@ for index, layer in enumerate(net.feature_layers):
         overall_anchors.append(net.ssd_anchor_box_encoder(index))
         overall_predictions.append(net.detection_layer(endpoints[layer], index))
 
-# [TODO]@BurakUzkent : Add a module to read the ground truth data for the given batch
+# [TODO]@BurakUzkent : Once optimized, use a large scale dataset to prove the model is working
 file_names = ['profile_picture.jpg', 'profile_picture.jpg']
 gt_bboxes = [[0.0, 0.25, 0.7, 0.75], [0.0, 0.25, 0.7, 0.75]]
 gt_bboxes = tf.constant(np.reshape(np.asarray(gt_bboxes, np.float32), (net.batch_size, 1, 4)), tf.float32)
@@ -258,7 +258,7 @@ eval_scores, eval_bboxes = utils.decode_predictions(overall_predictions, overall
 # Overlay the bounding boxes on the images
 tf_image_overlaid_detected = utils.overlay_bboxes(eval_scores[1], eval_bboxes[1], x_train)
 tf_image_overlaid_gt = utils.overlay_bboxes(gt_classes, gt_bboxes, x_train)
-tf.summary.image("Detected Bounding Boxes", tf_image_overlaid_detected, max_outputs = 20) 
+tf.summary.image("Detected Bounding Boxes", tf_image_overlaid_detected, max_outputs = 20)
 tf.summary.image("Ground Truth Bounding Boxes", tf_image_overlaid_gt, max_outputs = 20)
 merged = tf.summary.merge_all()
 
