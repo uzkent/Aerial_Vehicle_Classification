@@ -3,6 +3,7 @@ import numpy as np
 import utils
 import pdb
 import math
+import logging
 
 class SSDResNet50():
     """ This class contains the components of the ResNet50 Architecture """
@@ -11,7 +12,7 @@ class SSDResNet50():
     def __init__(self):
         """ Constructor for the SSD-ResNet50 Model """
         self.number_classes = 2 # +1 for background class
-        self.number_iterations = 1000
+        self.number_iterations = 10000
         self.anchor_sizes = [(15.,30.),
                       (45., 60.),
                       (75., 90.)]
@@ -163,14 +164,13 @@ class SSDResNet50():
             target_localizations_all = []
             target_scores_all = []
             for batch_index in range(self.batch_size):
-                target_tensor = utils.ssd_bboxes_encode_layer(gt_classes, gt_localizations, anchors,  self.number_classes, self.positive_threshold)
+                target_tensor = utils.ssd_bboxes_encode_layer(gt_classes[batch_index], gt_localizations[batch_index], anchors, self.number_classes, self.positive_threshold)
                 target_labels_all.append(target_tensor[0])
                 target_localizations_all.append(target_tensor[1])
                 target_scores_all.append(target_tensor[2])
             target_labels = tf.concat(target_labels_all, axis=-1)
             target_localizations = tf.stack(target_localizations_all)
             target_scores = tf.concat(target_scores_all, axis=-1)
-            target_scores = tf.Print(target_scores, [tf.reduce_max(target_scores)])
 
             # Determine the Positive and Negative Samples
             pos_samples = tf.cast(target_scores > self.positive_threshold, tf.uint16)
@@ -194,7 +194,7 @@ class SSDResNet50():
             with tf.name_scope('cross_entropy_neg{}'.format(index)):
                 loss_neg = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
                 negatives_only_loss = tf.reduce_sum(loss_neg * neg_samples_flattened)
-                loss_classification_neg = tf.div(negatives_only_loss, self.batch_size * num_neg_samples)            
+                loss_classification_neg = tf.div(negatives_only_loss, self.batch_size * num_neg_samples)     
                 loss_classification_neg = tf.Print(loss_classification_neg, [loss_classification_neg], "-> Negatives Loss")
 
             with tf.name_scope('localization{}'.format(index)):
@@ -217,16 +217,16 @@ x_train = tf.placeholder(tf.float32, [net.batch_size, net.img_shape[0], net.img_
 with tf.variable_scope("FirstStageFeatureExtractor") as scope:
     out_1 = net._conv2d(x_train, [3, 3, 3, 64], [64], [1, 1, 1, 1], 'conv3x3')
 with tf.variable_scope("ResNetBlock1"):
-    out_2 = net.resnet50_module(out_1, 3, 64, 64, 256, [1, 1, 1, 1])
+    out_2 = net.resnet50_module(out_1, 2, 64, 64, 256, [1, 1, 1, 1])
     endpoints['block1'] = out_2
 with tf.variable_scope("ResNetBlock2"):
-    out_3 = net.resnet50_module(out_2, 4, 128, 256, 512)
+    out_3 = net.resnet50_module(out_2, 2, 128, 256, 512)
     endpoints['block2'] = out_3
 with tf.variable_scope("ResNetBlock3"):
-    out_4 = net.resnet50_module(out_3, 6, 256, 512, 1024)
+    out_4 = net.resnet50_module(out_3, 2, 256, 512, 1024)
     endpoints['block3'] = out_4
 with tf.variable_scope("ResNetBlock4"):
-    out_5 = net.resnet50_module(out_4, 3, 512, 1024, 2048)
+    out_5 = net.resnet50_module(out_4, 2, 512, 1024, 2048)
     endpoints['block4'] = out_5
 
 # Perform Detections on the Desired Blocks
@@ -239,9 +239,9 @@ for index, layer in enumerate(net.feature_layers):
 
 # [TODO]@BurakUzkent : Add a module to read the ground truth data for the given batch
 file_names = ['profile_picture.jpg', 'profile_picture.jpg']
-gt_bboxes = [[0.25, 0.0, 0.75, 0.7], [0.25, 0.0, 0.75, 0.7]]
-gt_bboxes = tf.constant(np.reshape(np.asarray(gt_bboxes, np.float32), (net.batch_size, 4)), tf.float32)
-gt_classes = tf.constant([1, 1], tf.int64)
+gt_bboxes = [[0.0, 0.25, 0.7, 0.75], [0.0, 0.25, 0.7, 0.75]]
+gt_bboxes = tf.constant(np.reshape(np.asarray(gt_bboxes, np.float32), (net.batch_size, 1, 4)), tf.float32)
+gt_classes = tf.constant([[1], [1]], tf.int64)
 train_batch, train_iterator = utils.create_tf_dataset(file_names, net.buffer_size, net.number_iterations_dataset, net.batch_size)
 
 # Construct the Loss Function and Define Optimizer
@@ -251,6 +251,15 @@ tf.summary.scalar('total_loss', total_loss)
 tf.summary.scalar('positives_loss', positives_loss)
 tf.summary.scalar('negatives_loss', negatives_loss)
 tf.summary.scalar('localization_loss', localization_loss)
+
+# Decode predictions to the image domain
+eval_scores, eval_bboxes = utils.decode_predictions(overall_predictions, overall_anchors, tf.constant([0, 0, 1, 1], tf.float32))
+
+# Overlay the bounding boxes on the images
+tf_image_overlaid_detected = utils.overlay_bboxes(eval_scores[1], eval_bboxes[1], x_train)
+tf_image_overlaid_gt = utils.overlay_bboxes(gt_classes, gt_bboxes, x_train)
+tf.summary.image("Detected Bounding Boxes", tf_image_overlaid_detected, max_outputs = 20) 
+tf.summary.image("Ground Truth Bounding Boxes", tf_image_overlaid_gt, max_outputs = 20)
 merged = tf.summary.merge_all()
 
 # Execute the graph
@@ -263,3 +272,6 @@ with tf.Session() as sess:
         print("Loss at iteration {} : {}".format(iteration_id, loss_value))
         if iteration_id % 25 == 0:
             train_writer.add_summary(summary, iteration_id)
+
+    # Evaluate it on the validation dataset
+    detection_scores, detection_bboxes = sess.run([eval_scores, eval_bboxes], feed_dict={x_train: train_batch.eval(session=sess)})
