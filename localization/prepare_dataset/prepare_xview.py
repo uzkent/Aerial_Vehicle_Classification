@@ -38,8 +38,8 @@ def ground_truth_parser(parent_img_name, chip_name, ground_truth, coords, chip_s
             parent_img_coords = dict_ann['properties']['bounds_imcoords'].split(',')
             if int(parent_img_coords[0]) > (coords[0] - chip_size) and int(parent_img_coords[1]) > (coords[1] - chip_size):
                 if int(parent_img_coords[2]) < (coords[0]) and int(parent_img_coords[3]) < (coords[1]):
-                    chip_ground_truth.append([int(parent_img_coords[0])-coords[0], int(parent_img_coords[1])-coords[1],
-                    int(parent_img_coords[2])-coords[0], int(parent_img_coords[3])-coords[1]])
+                    chip_ground_truth.append([[int(parent_img_coords[0])-coords[0], int(parent_img_coords[1])-coords[1],
+                    int(parent_img_coords[2])-coords[0], int(parent_img_coords[3])-coords[1]], dict_ann['properties']['type_id']])
 
     with open('{}{}'.format(os.path.splitext(chip_name)[0], '.json'), 'w') as output_file:
         json.dump(chip_ground_truth, output_file)
