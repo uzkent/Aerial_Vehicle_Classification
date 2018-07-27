@@ -36,10 +36,10 @@ def ground_truth_parser(parent_img_name, chip_name, ground_truth, coords, chip_s
     for dict_ann in ground_truth['features']:
         if dict_ann['properties']['image_id'] == parent_img_name.split('/')[-1]:
             parent_img_coords = dict_ann['properties']['bounds_imcoords'].split(',')
-            if parent_img_coords[0] > coords[0] - chip_size and parent_img_coords[1] > coords[1] - chip_size:
-                if parent_img_coords[2] < coords[0] and parent_img_coords[3] < coords[1]:
-                    pdb.set_trace()
-                    chip_ground_truth.append(dict_ann['BOUNDS_IMCOORDS'])
+            if int(parent_img_coords[0]) > (coords[0] - chip_size) and int(parent_img_coords[1]) > (coords[1] - chip_size):
+                if int(parent_img_coords[2]) < (coords[0]) and int(parent_img_coords[3]) < (coords[1]):
+                    chip_ground_truth.append([int(parent_img_coords[0])-coords[0], int(parent_img_coords[1])-coords[1],
+                    int(parent_img_coords[2])-coords[0], int(parent_img_coords[3])-coords[1]])
 
     with open('{}{}'.format(os.path.splitext(chip_name)[0], '.json'), 'w') as output_file:
         json.dump(chip_ground_truth, output_file)
@@ -54,7 +54,6 @@ def main():
     for parent_img_name in imgs_name:
         chipper = image_chipper(parent_img_name, args.chip_size, args.output_dir)
         for i in chipper:
-            pdb.set_trace()
             chip_ground_truth = ground_truth_parser(parent_img_name, i[0], ground_truth, i[1], args.chip_size)
 
 if __name__ == '__main__':
