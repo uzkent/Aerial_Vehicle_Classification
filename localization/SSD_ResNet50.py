@@ -1,7 +1,6 @@
 import tensorflow as tf
 import numpy as np
 import math
-import pdb
 
 import utils
 
@@ -25,7 +24,7 @@ class SSDResNet50():
         self.batch_size = 2
         self.number_iterations_dataset = 10000
         self.buffer_size = 100
-        self.positive_threshold = 0.5
+        self.positive_threshold = 0.7
         self.negative_threshold = 0.3
 
     def variable_summaries(self, var):
@@ -273,6 +272,5 @@ with tf.Session() as sess:
         print("Loss at iteration {} : {}".format(iteration_id, loss_value))
         if iteration_id % 25 == 0:
             train_writer.add_summary(summary, iteration_id)
-
-    # Evaluate it on the validation dataset
-    detection_scores, detection_bboxes = sess.run([eval_scores, eval_bboxes], feed_dict={x_train: train_batch.eval(session=sess)})
+            # Evaluate it on the validation dataset
+            detection_scores, detection_bboxes = sess.run([eval_scores, eval_bboxes], feed_dict={x_train: train_batch.eval(session=sess)})

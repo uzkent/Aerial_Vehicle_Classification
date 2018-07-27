@@ -1,4 +1,5 @@
 import tensorflow as tf
+import pdb
 
 def parse_function(filename):
     """ Reads an image from a file, decodes it into a dense tensor, and resizes it
@@ -169,7 +170,7 @@ def get_shape(x, rank=None):
                 for s, d in zip(static_shape, dynamic_shape)]
 
 def tf_ssd_bboxes_select_layer(predictions_layer, localizations_layer,
-                               select_threshold=0.75,
+                               select_threshold=None,
                                num_classes=2,
                                ignore_class=0,
                                scope=None):
@@ -206,7 +207,6 @@ def tf_ssd_bboxes_select_layer(predictions_layer, localizations_layer,
 
         return d_scores, d_bboxes
 
-
 def tf_ssd_bboxes_select(predictions_net, localizations_net,
                          select_threshold=None,
                          num_classes=2,
@@ -228,13 +228,15 @@ def tf_ssd_bboxes_select(predictions_net, localizations_net,
         l_scores = []
         l_bboxes = []
         for i in range(len(predictions_net)):
-            scores, bboxes = tf_ssd_bboxes_select_layer(predictions_net[i][0],
+            predictions = tf.nn.softmax(predictions_net[i][0])
+            scores, bboxes = tf_ssd_bboxes_select_layer(predictions,
                                                         localizations_net[i],
                                                         select_threshold,
                                                         num_classes,
                                                         ignore_class)
             l_scores.append(scores)
             l_bboxes.append(bboxes)
+
         # Concat results.
         d_scores = {}
         d_bboxes = {}
@@ -338,7 +340,6 @@ def bboxes_nms(scores, bboxes, nms_threshold=0.5, keep_top_k=200, scope=None):
         bboxes = pad_axis(bboxes, 0, keep_top_k, axis=0)
         return scores, bboxes
 
-
 def bboxes_nms_batch(scores, bboxes, nms_threshold=0.5, keep_top_k=200,
                      scope=None):
     """Apply non-maximum selection to bounding boxes. In comparison to TF
@@ -369,8 +370,7 @@ def bboxes_nms_batch(scores, bboxes, nms_threshold=0.5, keep_top_k=200,
 
     # Tensors inputs.
     with tf.name_scope(scope, 'bboxes_nms_batch'):
-        r = tf.map_fn(lambda x: bboxes_nms(x[0], x[1],
-                                           nms_threshold, keep_top_k),
+        r = tf.map_fn(lambda x: bboxes_nms(x[0], x[1], nms_threshold, keep_top_k),
                       (scores, bboxes),
                       dtype=(scores.dtype, bboxes.dtype),
                       parallel_iterations=10,
