@@ -3,24 +3,25 @@ import tensorflow as tf
 import glob
 import json
 import numpy as np
+import os
 import pdb
 
-def batch_reader(img_names, ground_truth_names, index, batch_size=1):    
+def batch_reader(img_names, index, batch_size=1):    
     """ Gets the names of the files and ground truth for images and converts them
         to a tf object.
     """
     img = np.asarray(Image.open(img_names[index]))
     img_tensor = np.zeros((batch_size, img.shape[0], img.shape[1], img.shape[2]), dtype=np.int32)
     img_tensor[0, :, :, :] = img
-    ground_truth_name = ground_truth_names[index]
+    ground_truth_name = os.path.splitext(img_names[index])[0] + '.json'    
     with open(ground_truth_name) as f:
          ground_truth = json.load(f)
 
     ground_truth_class_tensor = np.zeros((batch_size, len(ground_truth)), dtype=np.int32)
     ground_truth_bbox_tensor = np.zeros((batch_size, len(ground_truth), 4), dtype=np.float32)
     for ind, gt_inn in enumerate(ground_truth):
-        ground_truth_class_tensor[0, ind] = gt_inn[1] 
-        ground_truth_bbox_tensor[0, ind, :] = ground_truth_bbox_tensor[0, ind, :] = [gt_inn[0][0], gt_inn[0][1], gt_inn[0][2], gt_inn[0][3]]
+        ground_truth_class_tensor[0, ind] = 1 # gt_inn[1] 
+        ground_truth_bbox_tensor[0, ind, :] = ground_truth_bbox_tensor[0, ind, :] = [gt_inn[0][1], gt_inn[0][0], gt_inn[0][3], gt_inn[0][2]]
 
     return img_tensor, ground_truth_bbox_tensor, ground_truth_class_tensor
 
