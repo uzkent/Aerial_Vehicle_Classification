@@ -11,7 +11,7 @@ class SSDResNet50():
 
     def __init__(self):
         """ Constructor for the SSD-ResNet50 Model """
-        self.number_classes = 2 # +1 for background class
+        self.number_classes = 4 # +1 for background class
         self.number_iterations = 10000
         self.anchor_sizes = [(15.,30.),
                       (45., 60.),
@@ -25,8 +25,9 @@ class SSDResNet50():
         self.batch_size = 1
         self.number_iterations_dataset = 1000
         self.buffer_size = 1000
-        self.positive_threshold = 0.7
+        self.positive_threshold = 0.5
         self.negative_threshold = 0.3
+        self.label_map = {'max': 0}
 
     def variable_summaries(self, var):
         """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
@@ -172,6 +173,7 @@ class SSDResNet50():
             target_localizations = tf.stack(target_localizations_all)
             target_scores = tf.concat(target_scores_all, axis=-1)
             target_scores = tf.Print(target_scores, [tf.reduce_max(target_scores)], "Maximums")
+
             # Determine the Positive and Negative Samples
             pos_samples = tf.cast(target_scores > self.positive_threshold, tf.uint16)
             num_pos_samples = tf.reduce_sum(pos_samples)
@@ -249,7 +251,7 @@ tf.summary.scalar('negatives_loss', negatives_loss)
 tf.summary.scalar('localization_loss', localization_loss)
 
 # Decode predictions to the image domain
-eval_scores, eval_bboxes = utils.decode_predictions(overall_predictions, overall_anchors, tf.constant([0, 0, 1, 1], tf.float32))
+eval_scores, eval_bboxes = utils.decode_predictions(overall_predictions, overall_anchors, net.number_classes, tf.constant([0, 0, 1, 1], tf.float32))
 
 # Overlay the bounding boxes on the images
 tf_image_overlaid_detected = utils.overlay_bboxes(eval_scores[1], eval_bboxes[1], x_train)
@@ -259,15 +261,13 @@ tf.summary.image("Ground Truth Bounding Boxes", tf_image_overlaid_gt, max_output
 merged = tf.summary.merge_all()
 
 # Execute the graph
-img_names = glob.glob('{}/{}'.format('./prepare_dataset/train_chips_xiew', '*.jpeg'))
+img_names = glob.glob('{}/{}'.format('./prepare_dataset/', '*.jpeg'))
 with tf.Session() as sess:
     train_writer = tf.summary.FileWriter('./train', sess.graph)
     sess.run(tf.global_variables_initializer())
     for epoch_id in range(0, net.number_iterations):
         for iteration_id in range(len(img_names)):
-            img_tensor, gt_bbox_tensor, gt_class_tensor = utils.batch_reader(img_names, iteration_id, net.batch_size)
-            summary, _, loss_value, pos_loss_value, neg_loss_value, loc_loss_value = sess.run([merged, optimizer, total_loss, positives_loss, negatives_loss, localization_loss], feed_dict={x_train: img_tensor, gt_bboxes: gt_bbox_tensor, gt_classes: gt_class_tensor})        
+            img_tensor, gt_bbox_tensor, gt_class_tensor = utils.batch_reader(img_names, iteration_id, net.label_map, net.batch_size)
+            eval_sc, summary, _, loss_value, pos_loss_value, neg_loss_value, loc_loss_value = sess.run([eval_scores, merged, optimizer, total_loss, positives_loss, negatives_loss, localization_loss], feed_dict={x_train: img_tensor, gt_bboxes: gt_bbox_tensor, gt_classes: gt_class_tensor})        
             print("Loss at iteration {} {} : {}".format(epoch_id, iteration_id, loss_value))
-            print("gt_class_tensor", gt_class_tensor)
-	    # if iteration_id % 25 == 0:
             train_writer.add_summary(summary, (epoch_id * len(img_names)) + iteration_id)
