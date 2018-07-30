@@ -58,7 +58,6 @@ def ssd_bboxes_encode_layer(labels,
                            bboxes,
                            anchors_layer,
                            num_classes,
-                           positive_threshold=0.90,
                            prior_scaling=[0.1, 0.1, 0.2, 0.2],
                            dtype=tf.float32):
     """Encode groundtruth labels and bounding boxes using SSD anchors from
@@ -206,7 +205,7 @@ def get_shape(x, rank=None):
 
 def tf_ssd_bboxes_select_layer(predictions_layer, localizations_layer,
                                num_classes,
-                               select_threshold=None,
+                               select_threshold=0.5,
                                ignore_class=0,
                                scope=None):
     """Extract classes, scores and bounding boxes from features in one layer.
@@ -245,7 +244,7 @@ def tf_ssd_bboxes_select_layer(predictions_layer, localizations_layer,
 
 def tf_ssd_bboxes_select(predictions_net, localizations_net,
                          num_classes,
-                         select_threshold=None,
+                         select_threshold=0.9,
                          ignore_class=0,
                          scope=None):
     """Extract classes, scores and bounding boxes from network output layers.
@@ -451,15 +450,15 @@ def bboxes_clip(bbox_ref, bboxes, scope=None):
         bboxes = tf.transpose(tf.stack([ymin, xmin, ymax, xmax], axis=0))
         return bboxes
 
-def decode_predictions(overall_predictions, overall_anchors, num_classes, clipping_bbox=None, select_threshold=None, nms_threshold=0.5, top_k=400, keep_top_k=200, prior_scaling=[0.1, 0.1, 0.2, 0.2]):   
+def decode_predictions(overall_predictions, overall_anchors, num_classes, clipping_bbox=None, select_threshold=None, nms_threshold=0.5, top_k=400, keep_top_k=200, prior_scaling=[0.1, 0.1, 0.2, 0.2]):
     """ Decode the boxes given by the network back to the image domain """
     bboxes = []
     for index, (predictions, anchors) in enumerate(zip(overall_predictions, overall_anchors)):
         yref, xref, href, wref = anchors
-        pred_cx = predictions[1][:, :, :, :, 0] * wref * prior_scaling[0] + xref
-        pred_cy = predictions[1][:, :, :, :, 1] * href * prior_scaling[1] + yref
-        pred_w = wref * tf.exp(predictions[1][:, :, :, :, 2] * prior_scaling[2])
-        pred_h = href * tf.exp(predictions[1][:, :, :, :, 3] * prior_scaling[3])
+        pred_cx = predictions[1][:, :, :, :, 0] * wref * prior_scaling[1] + xref
+        pred_cy = predictions[1][:, :, :, :, 1] * href * prior_scaling[0] + yref
+        pred_w = wref * tf.exp(predictions[1][:, :, :, :, 2] * prior_scaling[3])
+        pred_h = href * tf.exp(predictions[1][:, :, :, :, 3] * prior_scaling[2])
 	
         xmin = pred_cx - pred_w / 2.
         ymin = pred_cy - pred_h / 2.
