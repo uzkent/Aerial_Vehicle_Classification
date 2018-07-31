@@ -16,24 +16,29 @@ def class_label_mapper(original_label, label_map):
        label_map['max'] += 1
        return label_map[original_label]
 
-def batch_reader(img_names, index, label_map, batch_size=1):    
+def batch_reader(img_names, index, label_map, img_shape, batch_size=1):    
     """ Gets the names of the files and ground truth for images and converts them
         to a tf object.
     """
-    img = np.asarray(Image.open(img_names[index]))
-    img_tensor = np.zeros((batch_size, img.shape[0], img.shape[1], img.shape[2]), dtype=np.int32)
-    img_tensor[0, :, :, :] = img
-    ground_truth_name = '{}.{}'.format(os.path.splitext(img_names[index])[0], 'json')
-    with open(ground_truth_name) as f:
-         ground_truth = json.load(f)
+    img_tensor = np.zeros((batch_size, img_shape[0], img_shape[1], 3), dtype=np.int32)
+    ground_truth_all_classes = []
+    ground_truth_all_bboxes = []
+    for batch_index in range(0, batch_size):
+        img = np.asarray(Image.open(img_names[index+batch_index]))
+        img_tensor[batch_index, :, :, :] = img
+        ground_truth_name = '{}.{}'.format(os.path.splitext(img_names[index+batch_index])[0], 'json')
+        with open(ground_truth_name) as f:
+            ground_truth = json.load(f)
 
-    ground_truth_class_tensor = np.zeros((batch_size, len(ground_truth)), dtype=np.int32)
-    ground_truth_bbox_tensor = np.zeros((batch_size, len(ground_truth), 4), dtype=np.float32)
-    for ind, gt_inn in enumerate(ground_truth):
-        ground_truth_class_tensor[0, ind] = class_label_mapper(gt_inn[1], label_map)
-        ground_truth_bbox_tensor[0, ind, :] = ground_truth_bbox_tensor[0, ind, :] = [gt_inn[0][1], gt_inn[0][0], gt_inn[0][3], gt_inn[0][2]]
+        ground_truth_class_tensor = np.zeros((len(ground_truth)), np.int64)
+        ground_truth_bbox_tensor = np.zeros((len(ground_truth), 4), np.float32)
+        for ind, gt_inn in enumerate(ground_truth):
+            ground_truth_class_tensor[ind] = class_label_mapper(gt_inn[1], label_map)
+            ground_truth_bbox_tensor[ind, :] = [gt_inn[0][1], gt_inn[0][0], gt_inn[0][3], gt_inn[0][2]]
+        ground_truth_all_bboxes.append(ground_truth_bbox_tensor)
+        ground_truth_all_classes.append(ground_truth_class_tensor)
 
-    return img_tensor, ground_truth_bbox_tensor, ground_truth_class_tensor
+    return img_tensor, ground_truth_all_bboxes, ground_truth_all_classes
 
 def parse_function(filename):
     """ Reads an image from a file, decodes it into a dense tensor, and resizes it
@@ -244,7 +249,7 @@ def tf_ssd_bboxes_select_layer(predictions_layer, localizations_layer,
 
 def tf_ssd_bboxes_select(predictions_net, localizations_net,
                          num_classes,
-                         select_threshold=0.9,
+                         select_threshold=0.5,
                          ignore_class=0,
                          scope=None):
     """Extract classes, scores and bounding boxes from network output layers.
@@ -466,7 +471,7 @@ def decode_predictions(overall_predictions, overall_anchors, num_classes, clippi
         ymax = pred_cy + pred_h / 2.
         bboxes.append(tf.stack([ymin, xmin, ymax, xmax], axis=-1))
 
-    rscores, rbboxes = tf_ssd_bboxes_select(overall_predictions, bboxes, num_classes)    
+    rscores, rbboxes = tf_ssd_bboxes_select(overall_predictions, bboxes, num_classes, select_threshold)
     rscores, rbboxes = bboxes_sort(rscores, rbboxes, top_k=top_k)
     rscores, rbboxes = bboxes_nms_batch(rscores, rbboxes, nms_threshold=nms_threshold, keep_top_k=keep_top_k)
     rbboxes = bboxes_clip(clipping_bbox, rbboxes)
@@ -507,8 +512,15 @@ def tensor_shape(x, rank=3):
         return [s if s is not None else d
                 for s, d in zip(static_shape, dynamic_shape)]
 
-def overlay_bboxes(detection_scores, detection_bboxes, tf_image):
+def overlay_bboxes_eval(detection_scores, detection_bboxes, tf_image):
     """ This function draws the bounding boxes on a batch of images """
-    tf_image_overlaid  = tf.image.draw_bounding_boxes(tf_image, detection_bboxes, name="overlay_bboxes")
+    for class_index in detection_bboxes:
+        tf_image  = tf.image.draw_bounding_boxes(tf_image, detection_bboxes[class_index], name="overlay_bboxes")
 
-    return tf_image_overlaid
+    return tf_image
+
+def overlay_bboxes_ground_truth(detection_scores, detection_bboxes, tf_image, batch_size=1):
+    """ This function draws the bounding boxes on a batch of images """
+    # tf_image  = tf.image.draw_bounding_boxes(tf_image, tf.stack(detection_bboxes), name="overlay_bboxes")
+
+    return tf_image
