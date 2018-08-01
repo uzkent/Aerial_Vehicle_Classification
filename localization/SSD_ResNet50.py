@@ -28,7 +28,7 @@ class SSDResNet50():
         self.positive_threshold = 0.5
         self.negative_threshold = 0.49
         self.select_threshold = 0.5
-        self.learning_rate = 1e-4
+        self.learning_rate = 1e-3
         self.label_map = {'max': 0}
 
     def variable_summaries(self, var):
@@ -155,7 +155,7 @@ class SSDResNet50():
 
         return class_predictions, loc_predictions
 
-    def loss_function(self, gt_localizations, gt_classes, overall_predictions, overall_anchors, ratio_negatives=3):
+    def loss_function(self, gt_localizations, gt_classes, overall_predictions, overall_anchors, ratio_negatives=5):
         """ Define the loss function for SSD - Classification + Localization """
         overall_loss = 0
         positive_loss = 0
@@ -190,7 +190,7 @@ class SSDResNet50():
                 loss_pos = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
                 positives_only_loss = tf.reduce_sum(loss_pos * pos_samples_flattened)
                 positives_only_loss = tf.Print(positives_only_loss, [positives_only_loss], "-> Positives Loss")
-                loss_classification_pos = tf.div(positives_only_loss, self.batch_size * (tf.cast(num_pos_samples, tf.float32) + 1e-4))
+                loss_classification_pos = tf.div(positives_only_loss, self.batch_size)
 
             with tf.name_scope('cross_entropy_neg{}'.format(index)):
                 loss_neg = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
@@ -200,20 +200,20 @@ class SSDResNet50():
                     num_hard_negatives = tf.cast(num_pos_samples * ratio_negatives, tf.int32)
                 _, indices_hnm = tf.nn.top_k(loss_neg * neg_samples_flattened, num_hard_negatives, name='hard_negative_mining')
                 negatives_only_loss = tf.reduce_sum(tf.gather(loss_neg, indices_hnm))
-                loss_classification_neg = tf.div(negatives_only_loss, self.batch_size * (tf.cast(num_hard_negatives, tf.float32) + 1e-4))
+                loss_classification_neg = tf.div(negatives_only_loss, self.batch_size)
                 loss_classification_neg = tf.Print(loss_classification_neg, [loss_classification_neg], "-> Negatives Loss")
 
             with tf.name_scope('localization{}'.format(index)):
                 weights = tf.expand_dims(1.0 * tf.to_float(tf.reshape(pos_samples, [self.batch_size, self.feat_shapes[index][0],
                 self.feat_shapes[index][1], len(self.anchor_sizes[index]) * (len(self.anchor_ratios[index]) + 1)])), axis=-1)
                 loss = tf.abs(predictions[1] - target_localizations)
-                loss_localization = tf.div(tf.reduce_sum(loss * weights), self.batch_size * (tf.cast(num_pos_samples, tf.float32) + 1e-4))
+                loss_localization = tf.div(tf.reduce_sum(loss * weights), self.batch_size)
                 loss_localization = tf.Print(loss_localization, [loss_localization], "-> Localization Loss")
 
-            overall_loss += loss_classification_pos + loss_classification_neg + loss_localization
-            positive_loss += loss_classification_pos
-            negative_loss += loss_classification_neg
-            loc_loss += loss_localization
+            overall_loss += ((loss_classification_pos + loss_classification_neg + loss_localization) / (tf.cast(num_pos_samples, tf.float32) + 1e-4))
+            positive_loss += (loss_classification_pos / (tf.cast(num_pos_samples, tf.float32) + 1e-4))
+            negative_loss += (loss_classification_neg / (tf.cast(num_pos_samples, tf.float32) + 1e-4))
+            loc_loss += (loss_localization / (tf.cast(num_pos_samples, tf.float32) + 1e-4))
         return overall_loss, positive_loss, negative_loss, loc_loss
 
 # Construct the Graph
@@ -259,13 +259,13 @@ eval_scores, eval_bboxes = utils.decode_predictions(overall_predictions, overall
 
 # Overlay the bounding boxes on the images
 tf_image_overlaid_detected = utils.overlay_bboxes_eval(eval_scores, eval_bboxes, x_train)
-tf_image_overlaid_gt = utils.overlay_bboxes_ground_truth(gt_classes, gt_bboxes, x_train)
+tf_image_overlaid_gt = utils.overlay_bboxes_ground_truth(gt_classes, gt_bboxes, x_train, net.batch_size)
 tf.summary.image("Detected Bounding Boxes", tf_image_overlaid_detected, max_outputs = 20) 
 tf.summary.image("Ground Truth Bounding Boxes", tf_image_overlaid_gt, max_outputs = 20)
 merged = tf.summary.merge_all()
 
 # Execute the graph
-img_names = glob.glob('{}/{}'.format('./prepare_dataset/train_chips_xiew/one_batch', '*.jpeg'))
+img_names = glob.glob('{}/{}'.format('./prepare_dataset/train_chips_xiew', '*.jpeg'))
 img_names = np.array(img_names)
 np.random.shuffle(img_names)
 with tf.Session() as sess:

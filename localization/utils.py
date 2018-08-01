@@ -519,8 +519,10 @@ def overlay_bboxes_eval(detection_scores, detection_bboxes, tf_image):
 
     return tf_image
 
-def overlay_bboxes_ground_truth(detection_scores, detection_bboxes, tf_image, batch_size=1):
+def overlay_bboxes_ground_truth(gt_classes, gt_bboxes, tf_image, batch_size=1):
     """ This function draws the bounding boxes on a batch of images """
-    # tf_image  = tf.image.draw_bounding_boxes(tf_image, tf.stack(detection_bboxes), name="overlay_bboxes")
-
-    return tf_image
+    draw_bbox_tensor = []
+    for batch_ind in range(batch_size):
+        draw_bbox_tensor.append(tf.image.draw_bounding_boxes(tf.expand_dims(tf_image[batch_ind], dim=0), tf.expand_dims(gt_bboxes[batch_ind], dim=0), name="overlay_bboxes"))        
+    tf_image = tf.concat(draw_bbox_tensor, axis=0)
+    return tf_image 
