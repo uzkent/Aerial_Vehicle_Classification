@@ -1,5 +1,44 @@
+from PIL import Image
 import tensorflow as tf
+import glob
+import json
+import numpy as np
+import os
 import pdb
+
+def class_label_mapper(original_label, label_map):
+    """ Maps the original label to an ordered label 
+    """
+    if original_label in label_map:
+       return label_map[original_label]
+    else:
+       label_map[original_label] = label_map['max'] + 1
+       label_map['max'] += 1
+       return label_map[original_label]
+
+def batch_reader(img_names, index, label_map, img_shape, batch_size=1):    
+    """ Gets the names of the files and ground truth for images and converts them
+        to a tf object.
+    """
+    img_tensor = np.zeros((batch_size, img_shape[0], img_shape[1], 3), dtype=np.int32)
+    ground_truth_all_classes = []
+    ground_truth_all_bboxes = []
+    for batch_index in range(0, batch_size):
+        img = np.asarray(Image.open(img_names[index+batch_index]))
+        img_tensor[batch_index, :, :, :] = img
+        ground_truth_name = '{}.{}'.format(os.path.splitext(img_names[index+batch_index])[0], 'json')
+        with open(ground_truth_name) as f:
+            ground_truth = json.load(f)
+
+        ground_truth_class_tensor = np.zeros((len(ground_truth)), np.int64)
+        ground_truth_bbox_tensor = np.zeros((len(ground_truth), 4), np.float32)
+        for ind, gt_inn in enumerate(ground_truth):
+            ground_truth_class_tensor[ind] = class_label_mapper(gt_inn[1], label_map)
+            ground_truth_bbox_tensor[ind, :] = [gt_inn[0][1], gt_inn[0][0], gt_inn[0][3], gt_inn[0][2]]
+        ground_truth_all_bboxes.append(ground_truth_bbox_tensor)
+        ground_truth_all_classes.append(ground_truth_class_tensor)
+
+    return img_tensor, ground_truth_all_bboxes, ground_truth_all_classes
 
 def parse_function(filename):
     """ Reads an image from a file, decodes it into a dense tensor, and resizes it
@@ -9,10 +48,9 @@ def parse_function(filename):
     image_scaled = tf.image.per_image_standardization(image_decoded)
     return image_scaled
 
-
-def create_tf_dataset(file_names, buffer_size, number_iterations_dataset, batch_size=1):
+def create_tf_dataset(file_names, gt_bboxes, gt_classes, buffer_size, number_iterations_dataset, batch_size=1):
     """ This function returns a pointer to iterate over the batches of data """
-    train_dataset = tf.data.Dataset.from_tensor_slices((file_names))
+    train_dataset = tf.data.Dataset.from_tensor_slices((file_names, gt_bboxes, gt_classes))
     train_dataset = train_dataset.map(parse_function)
     train_dataset = train_dataset.repeat(number_iterations_dataset)
     train_dataset = train_dataset.shuffle(buffer_size=buffer_size)
@@ -25,7 +63,6 @@ def ssd_bboxes_encode_layer(labels,
                            bboxes,
                            anchors_layer,
                            num_classes,
-                           positive_threshold=0.5,
                            prior_scaling=[0.1, 0.1, 0.2, 0.2],
                            dtype=tf.float32):
     """Encode groundtruth labels and bounding boxes using SSD anchors from
@@ -108,10 +145,12 @@ def ssd_bboxes_encode_layer(labels,
         # Mask: check threshold + scores + no annotations + num_classes.
         mask = tf.greater(jaccard, feat_scores)
         mask = tf.logical_and(mask, feat_scores > -0.5)
+
+        # [TODO] : Fix the following line
         mask = tf.logical_and(mask, label < num_classes)
         imask = tf.cast(mask, tf.int64)
         fmask = tf.cast(mask, dtype)
-
+        
         # Update values using mask.
         feat_labels = imask * label + (1 - imask) * feat_labels
         feat_scores = tf.where(mask, jaccard, feat_scores)
@@ -170,8 +209,8 @@ def get_shape(x, rank=None):
                 for s, d in zip(static_shape, dynamic_shape)]
 
 def tf_ssd_bboxes_select_layer(predictions_layer, localizations_layer,
-                               select_threshold=None,
-                               num_classes=2,
+                               num_classes,
+                               select_threshold=0.5,
                                ignore_class=0,
                                scope=None):
     """Extract classes, scores and bounding boxes from features in one layer.
@@ -207,9 +246,10 @@ def tf_ssd_bboxes_select_layer(predictions_layer, localizations_layer,
 
         return d_scores, d_bboxes
 
+
 def tf_ssd_bboxes_select(predictions_net, localizations_net,
-                         select_threshold=None,
-                         num_classes=2,
+                         num_classes,
+                         select_threshold=0.5,
                          ignore_class=0,
                          scope=None):
     """Extract classes, scores and bounding boxes from network output layers.
@@ -231,12 +271,11 @@ def tf_ssd_bboxes_select(predictions_net, localizations_net,
             predictions = tf.nn.softmax(predictions_net[i][0])
             scores, bboxes = tf_ssd_bboxes_select_layer(predictions,
                                                         localizations_net[i],
-                                                        select_threshold,
                                                         num_classes,
+                                                        select_threshold,
                                                         ignore_class)
             l_scores.append(scores)
             l_bboxes.append(bboxes)
-
         # Concat results.
         d_scores = {}
         d_bboxes = {}
@@ -278,7 +317,7 @@ def bboxes_sort(scores, bboxes, top_k=400, scope=None):
         def fn_gather(bboxes, idxes):
             bb = tf.gather(bboxes, idxes)
             return [bb]
-        r = tf.map_fn(lambda x: fn_gather(x[0], x[1]),
+        r = tf.map_fn(lambda x: fn_gather(x[0], x[1]), 
                       [bboxes, idxes],
                       dtype=[bboxes.dtype],
                       parallel_iterations=10,
@@ -340,6 +379,7 @@ def bboxes_nms(scores, bboxes, nms_threshold=0.5, keep_top_k=200, scope=None):
         bboxes = pad_axis(bboxes, 0, keep_top_k, axis=0)
         return scores, bboxes
 
+
 def bboxes_nms_batch(scores, bboxes, nms_threshold=0.5, keep_top_k=200,
                      scope=None):
     """Apply non-maximum selection to bounding boxes. In comparison to TF
@@ -370,7 +410,8 @@ def bboxes_nms_batch(scores, bboxes, nms_threshold=0.5, keep_top_k=200,
 
     # Tensors inputs.
     with tf.name_scope(scope, 'bboxes_nms_batch'):
-        r = tf.map_fn(lambda x: bboxes_nms(x[0], x[1], nms_threshold, keep_top_k),
+        r = tf.map_fn(lambda x: bboxes_nms(x[0], x[1],
+                                           nms_threshold, keep_top_k),
                       (scores, bboxes),
                       dtype=(scores.dtype, bboxes.dtype),
                       parallel_iterations=10,
@@ -414,26 +455,27 @@ def bboxes_clip(bbox_ref, bboxes, scope=None):
         bboxes = tf.transpose(tf.stack([ymin, xmin, ymax, xmax], axis=0))
         return bboxes
 
-def decode_predictions(overall_predictions, overall_anchors, clipping_bbox=None, select_threshold=None, nms_threshold=0.5, top_k=400, keep_top_k=200, prior_scaling=[0.1, 0.1, 0.2, 0.2]):
+def decode_predictions(overall_predictions, overall_anchors, num_classes, clipping_bbox=None, select_threshold=None, nms_threshold=0.5, top_k=400, keep_top_k=200, prior_scaling=[0.1, 0.1, 0.2, 0.2]):
     """ Decode the boxes given by the network back to the image domain """
     bboxes = []
     for index, (predictions, anchors) in enumerate(zip(overall_predictions, overall_anchors)):
         yref, xref, href, wref = anchors
-        pred_cx = predictions[1][:, :, :, :, 0] * wref * prior_scaling[0] + xref
-        pred_cy = predictions[1][:, :, :, :, 1] * href * prior_scaling[1] + yref
-        pred_w = wref * tf.exp(predictions[1][:, :, :, :, 2] * prior_scaling[2])
-        pred_h = href * tf.exp(predictions[1][:, :, :, :, 3] * prior_scaling[3])
-
+        pred_cx = predictions[1][:, :, :, :, 0] * wref * prior_scaling[1] + xref
+        pred_cy = predictions[1][:, :, :, :, 1] * href * prior_scaling[0] + yref
+        pred_w = wref * tf.exp(predictions[1][:, :, :, :, 2] * prior_scaling[3])
+        pred_h = href * tf.exp(predictions[1][:, :, :, :, 3] * prior_scaling[2])
+	
         xmin = pred_cx - pred_w / 2.
         ymin = pred_cy - pred_h / 2.
         xmax = pred_cx + pred_w / 2.
         ymax = pred_cy + pred_h / 2.
         bboxes.append(tf.stack([ymin, xmin, ymax, xmax], axis=-1))
 
-    rscores, rbboxes = tf_ssd_bboxes_select(overall_predictions, bboxes)
+    rscores, rbboxes = tf_ssd_bboxes_select(overall_predictions, bboxes, num_classes, select_threshold)
     rscores, rbboxes = bboxes_sort(rscores, rbboxes, top_k=top_k)
     rscores, rbboxes = bboxes_nms_batch(rscores, rbboxes, nms_threshold=nms_threshold, keep_top_k=keep_top_k)
     rbboxes = bboxes_clip(clipping_bbox, rbboxes)
+
     return rscores, rbboxes
 
 def channel_to_last(inputs,
@@ -470,8 +512,17 @@ def tensor_shape(x, rank=3):
         return [s if s is not None else d
                 for s, d in zip(static_shape, dynamic_shape)]
 
-def overlay_bboxes(detection_scores, detection_bboxes, tf_image):
+def overlay_bboxes_eval(detection_scores, detection_bboxes, tf_image):
     """ This function draws the bounding boxes on a batch of images """
-    tf_image_overlaid  = tf.image.draw_bounding_boxes(tf_image, detection_bboxes, name="overlay_bboxes")
+    for class_index in detection_bboxes:
+        tf_image  = tf.image.draw_bounding_boxes(tf_image, detection_bboxes[class_index], name="overlay_bboxes")
 
-    return tf_image_overlaid
+    return tf_image
+
+def overlay_bboxes_ground_truth(gt_classes, gt_bboxes, tf_image, batch_size=1):
+    """ This function draws the bounding boxes on a batch of images """
+    draw_bbox_tensor = []
+    for batch_ind in range(batch_size):
+        draw_bbox_tensor.append(tf.image.draw_bounding_boxes(tf.expand_dims(tf_image[batch_ind], dim=0), tf.expand_dims(gt_bboxes[batch_ind], dim=0), name="overlay_bboxes"))        
+    tf_image = tf.concat(draw_bbox_tensor, axis=0)
+    return tf_image 
