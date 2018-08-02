@@ -25,6 +25,7 @@ def batch_reader(img_names, index, label_map, img_shape, batch_size=1):
     ground_truth_all_bboxes = []
     for batch_index in range(0, batch_size):
         img = np.asarray(Image.open(img_names[index+batch_index]))
+        # img = img - np.mean(img, axis=(0, 1))
         img_tensor[batch_index, :, :, :] = img
         ground_truth_name = '{}.{}'.format(os.path.splitext(img_names[index+batch_index])[0], 'json')
         with open(ground_truth_name) as f:

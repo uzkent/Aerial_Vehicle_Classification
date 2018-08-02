@@ -55,21 +55,25 @@ class SSDResNet50():
         self.variable_summaries(bias)
         return bias
 
-    def _batch_norm(self, input, filter_id):
+    def _batch_norm(self, input, filter_id, is_training):
+        input_norm = tf.layers.batch_normalization(input, training=is_training)
+        """
         batch_mean, batch_var = tf.nn.moments(input, [0])
         input_norm  = (input - batch_mean) / tf.sqrt(batch_var + 1e-5)
         shape = [int(input.shape[0].value), int(input.shape[1].value), int(input.shape[2].value), int(input.shape[3].value)]
         scale = tf.get_variable('bnorm_scale' + filter_id, shape=shape, initializer=tf.ones_initializer())
         bias = tf.get_variable('bnorm_bias' + filter_id, shape=shape, initializer=tf.zeros_initializer())
         return scale * input_norm + bias
+        """
+        return input_norm
 
-    def _conv2d(self, input_data, shape, bias_shape, stride, filter_id, padding='SAME'):
+    def _conv2d(self, input_data, shape, bias_shape, stride, filter_id, is_training, padding='SAME'):
         """ Perform 2D convolution on the input data and apply RELU """
         weights = self.weight_variable(shape, 'weights' + filter_id)
         bias = self.bias_variable(bias_shape, 'bias' + filter_id)
         output_conv = tf.nn.conv2d(input_data, weights, strides=stride, padding='SAME')
-        output_conv_norm = self._batch_norm(output_conv, filter_id)      
-        return tf.nn.relu(output_conv_norm + bias)
+        # output_conv_norm = self._batch_norm(output_conv + bias, filter_id, is_training)      
+        return tf.nn.relu(output_conv + bias)
 
     def _fcl(self, input_data, shape, bias_shape, filter_id, classification_layer=False):
         """ Run a Fully Connected Layer and ReLU if necessary """
@@ -83,30 +87,30 @@ class SSDResNet50():
             return tf.nn.relu(tf.matmul(out_fc_layer, weights) + bias)
 
     def resnet50_block(self, input_feature_map, number_bottleneck_channels,
-    number_input_channels, number_output_channels, stride=[1, 1, 1, 1]):
+    number_input_channels, number_output_channels, is_training, stride=[1, 1, 1, 1]):
         """ Run a ResNet block """
         out_1 = self._conv2d(input_feature_map, [1, 1, number_input_channels, number_bottleneck_channels],
-        [number_bottleneck_channels], [1, 1, 1, 1], 'bottleneck_down')
+        [number_bottleneck_channels], [1, 1, 1, 1], 'bottleneck_down', is_training)
         out_2 = self._conv2d(out_1, [3, 3, number_bottleneck_channels, number_bottleneck_channels],
-        [number_bottleneck_channels], stride, 'conv3x3')
+        [number_bottleneck_channels], stride, 'conv3x3', is_training)
         out_3 = self._conv2d(out_2, [1, 1, number_bottleneck_channels, number_output_channels],
-        [number_output_channels], [1, 1, 1, 1], 'bottleneck_up')
+        [number_output_channels], [1, 1, 1, 1], 'bottleneck_up', is_training)
         identity_mapping = self._conv2d(input_feature_map, [1, 1, number_input_channels, number_output_channels],
-        [number_output_channels], stride, 'identity_mapping')
+        [number_output_channels], stride, 'identity_mapping', is_training)
         return tf.add(identity_mapping, out_3)
 
     def resnet50_module(self, input_data, number_blocks, number_bottleneck_channels, number_input_channels,
-                    number_output_channels, stride=[1, 2, 2, 1]):
+                    number_output_channels, is_training, stride=[1, 2, 2, 1]):
         """ Run a ResNet module consisting of residual blocks """
         for index, block in enumerate(range(number_blocks)):
             if index == 0:
                 with tf.variable_scope('module' + str(index)):
                     out = self.resnet50_block(input_data, number_bottleneck_channels, number_input_channels,
-                    number_output_channels, stride=stride)
+                    number_output_channels, is_training, stride=stride)
             else:
                 with tf.variable_scope('module' + str(index)):
                     out = self.resnet50_block(out, number_bottleneck_channels, number_output_channels,
-                    number_output_channels, stride=[1, 1, 1, 1])
+                    number_output_channels, is_training, stride=[1, 1, 1, 1])
 
         return out
 
@@ -219,30 +223,31 @@ class SSDResNet50():
                 loss_localization = tf.div(tf.reduce_sum(loss * weights), self.batch_size)
                 loss_localization = tf.Print(loss_localization, [loss_localization], "-> Localization Loss")
 
-            overall_loss += ((loss_classification_pos + loss_classification_neg + loss_localization) / (tf.cast(num_pos_samples, tf.float32) + 1e-4))
-            positive_loss += (loss_classification_pos / (tf.cast(num_pos_samples, tf.float32) + 1e-4))
-            negative_loss += (loss_classification_neg / (tf.cast(num_pos_samples, tf.float32) + 1e-4))
-            loc_loss += (loss_localization / (tf.cast(num_pos_samples, tf.float32) + 1e-4))
+            overall_loss += ((loss_classification_pos + loss_classification_neg + loss_localization) / (tf.cast(num_pos_samples, tf.float32) + 1e-8))
+            positive_loss += (loss_classification_pos / (tf.cast(num_pos_samples, tf.float32) + 1e-8))
+            negative_loss += (loss_classification_neg / (tf.cast(num_pos_samples, tf.float32) + 1e-8))
+            loc_loss += (loss_localization / (tf.cast(num_pos_samples, tf.float32) + 1e-8))
         return overall_loss, positive_loss, negative_loss, loc_loss
 
 # Construct the Graph
 net = SSDResNet50()
 endpoints = {}
 x_train = tf.placeholder(tf.float32, [net.batch_size, net.img_shape[0], net.img_shape[1], 3])
+is_training = tf.placeholder(tf.bool)
 with tf.variable_scope("FirstStageFeatureExtractor") as scope:
-    out_1 = net._conv2d(x_train, [7, 7, 3, 64], [64], [1, 2, 2, 1], 'conv3x3')
+    out_1 = net._conv2d(x_train, [7, 7, 3, 64], [64], [1, 2, 2, 1], 'conv3x3', is_training)
     out_1_pool = tf.nn.max_pool(out_1, [1, 2, 2, 1], [1, 2, 2, 1], padding='VALID')
 with tf.variable_scope("ResNetBlock1"):
-    out_2 = net.resnet50_module(out_1_pool, 3, 64, 64, 256, [1, 1, 1, 1])
+    out_2 = net.resnet50_module(out_1_pool, 3, 64, 64, 256, is_training, [1, 1, 1, 1])
     endpoints['block2'] = out_2
 with tf.variable_scope("ResNetBlock2"):
-    out_3 = net.resnet50_module(out_2, 4, 128, 256, 512)
+    out_3 = net.resnet50_module(out_2, 4, 128, 256, 512, is_training)
     endpoints['block3'] = out_3
 with tf.variable_scope("ResNetBlock3"):
-    out_4 = net.resnet50_module(out_3, 6, 256, 512, 1024)
+    out_4 = net.resnet50_module(out_3, 6, 256, 512, 1024, is_training)
     endpoints['block4'] = out_4
 with tf.variable_scope("ResNetBlock4"):
-    out_5 = net.resnet50_module(out_4, 3, 512, 1024, 2048)
+    out_5 = net.resnet50_module(out_4, 3, 512, 1024, 2048, is_training)
     endpoints['block5'] = out_5
 
 # Perform Detections on the Desired Blocks
@@ -257,7 +262,10 @@ for index, layer in enumerate(net.feature_layers):
 gt_classes = [tf.placeholder(tf.int64, [None]) for _ in range(net.batch_size)]
 gt_bboxes = [tf.placeholder(tf.float32, [None, 4]) for _ in range(net.batch_size)]
 total_loss, positives_loss, negatives_loss, localization_loss = net.loss_function(gt_bboxes, gt_classes, overall_predictions, overall_anchors)
-optimizer = tf.train.AdamOptimizer(net.learning_rate).minimize(total_loss)
+optimizer = tf.train.AdamOptimizer(net.learning_rate)
+update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+with tf.control_dependencies(update_ops):
+    train_op = optimizer.minimize(total_loss)
 tf.summary.scalar('total_loss', total_loss)
 tf.summary.scalar('positives_loss', positives_loss)
 tf.summary.scalar('negatives_loss', negatives_loss)
@@ -274,18 +282,23 @@ tf.summary.image("Ground Truth Bounding Boxes", tf_image_overlaid_gt, max_output
 merged = tf.summary.merge_all()
 
 # Execute the graph
-img_names = glob.glob('{}/{}'.format('./prepare_dataset/train_chips_xiew', '*.jpeg'))
+img_names = glob.glob('{}/{}'.format('./prepare_dataset/train_chips_xiew/small_set', '*.jpeg'))
 img_names = np.array(img_names)
 np.random.shuffle(img_names)
 with tf.Session() as sess:
-    train_writer = tf.summary.FileWriter('./train', sess.graph)
+    train_writer = tf.summary.FileWriter('./train_wo_bn', sess.graph)
+    test_writer = tf.summary.FileWriter('./test_wo_bn', sess.graph)
     sess.run(tf.global_variables_initializer())
     for epoch_id in range(0, net.number_iterations):
         for iteration_id in range(len(img_names)):
             try:
                 img_tensor, gt_bbox_tensor, gt_class_tensor = utils.batch_reader(img_names, iteration_id, net.label_map, net.img_shape, net.batch_size)
-            except:
+            except Exception as error:
+                print(error)
                 continue
-            summary, _, loss_value, pos_loss_value, neg_loss_value, loc_loss_value = sess.run([merged, optimizer, total_loss, positives_loss, negatives_loss, localization_loss], feed_dict={x_train: img_tensor, gt_bboxes[0]: gt_bbox_tensor[0], gt_classes[0]: gt_class_tensor[0], gt_bboxes[1]: gt_bbox_tensor[1], gt_classes[1]: gt_class_tensor[1], gt_bboxes[2]: gt_bbox_tensor[2], gt_classes[2]: gt_class_tensor[2], gt_bboxes[3]: gt_bbox_tensor[3], gt_classes[3]: gt_class_tensor[3], gt_bboxes[4]: gt_bbox_tensor[4], gt_classes[4]: gt_class_tensor[4], gt_bboxes[5]: gt_bbox_tensor[5], gt_classes[5]: gt_class_tensor[5], gt_bboxes[6]: gt_bbox_tensor[6], gt_classes[6]: gt_class_tensor[6], gt_bboxes[7]: gt_bbox_tensor[7], gt_classes[7]: gt_class_tensor[7]})
+            summary, _, loss_value = sess.run([merged, train_op, total_loss], feed_dict={is_training: True, x_train: img_tensor, gt_bboxes[0]: gt_bbox_tensor[0], gt_classes[0]: gt_class_tensor[0], gt_bboxes[1]: gt_bbox_tensor[1], gt_classes[1]: gt_class_tensor[1], gt_bboxes[2]: gt_bbox_tensor[2], gt_classes[2]: gt_class_tensor[2], gt_bboxes[3]: gt_bbox_tensor[3], gt_classes[3]: gt_class_tensor[3], gt_bboxes[4]: gt_bbox_tensor[4], gt_classes[4]: gt_class_tensor[4], gt_bboxes[5]: gt_bbox_tensor[5], gt_classes[5]: gt_class_tensor[5], gt_bboxes[6]: gt_bbox_tensor[6], gt_classes[6]: gt_class_tensor[6], gt_bboxes[7]: gt_bbox_tensor[7], gt_classes[7]: gt_class_tensor[7]})
             print("Loss at iteration {} {} : {}".format(epoch_id, iteration_id, loss_value))    
             train_writer.add_summary(summary, (epoch_id * len(img_names)) + iteration_id)
+       
+        summary, loss_value = sess.run([merged, total_loss], feed_dict={is_training: False, x_train: img_tensor, gt_bboxes[0]: gt_bbox_tensor[0], gt_classes[0]: gt_class_tensor[0], gt_bboxes[1]: gt_bbox_tensor[1], gt_classes[1]: gt_class_tensor[1], gt_bboxes[2]: gt_bbox_tensor[2], gt_classes[2]: gt_class_tensor[2], gt_bboxes[3]: gt_bbox_tensor[3], gt_classes[3]: gt_class_tensor[3], gt_bboxes[4]: gt_bbox_tensor[4], gt_classes[4]: gt_class_tensor[4], gt_bboxes[5]: gt_bbox_tensor[5], gt_classes[5]: gt_class_tensor[5], gt_bboxes[6]: gt_bbox_tensor[6], gt_classes[6]: gt_class_tensor[6], gt_bboxes[7]: gt_bbox_tensor[7], gt_classes[7]: gt_class_tensor[7]})
+        test_writer.add_summary(summary, (epoch_id * len(img_names)) + iteration_id)
