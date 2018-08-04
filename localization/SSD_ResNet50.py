@@ -11,14 +11,14 @@ class SSDResNet50():
 
     def __init__(self):
         """ Constructor for the SSD-ResNet50 Model """
-        self.number_classes = 7 # +1 for background class
+        self.number_classes = 2 # +1 for background class
         self.number_iterations = 1000
-        self.anchor_sizes = [(15.,30.),
-                      (45., 60.),
-                      (75., 90.)]
-        self.anchor_ratios = [[2, .5],
-                        [2, .5],
-                        [2, .5]]
+        self.anchor_sizes = [(30., 45.),
+                      (60., 75.),
+                      (90., 105.)]
+        self.anchor_ratios = [[2, .5, 3., 1./3.],
+                        [2, .5, 3., 1./3.],
+                        [2, .5, 3., 1./3.]]
         self.feat_shapes = [[28, 28],[14, 14],[7, 7]]
         self.anchor_steps = [8, 16.5, 33]
         self.img_shape = [224, 224]
@@ -26,8 +26,9 @@ class SSDResNet50():
         self.number_iterations_dataset = 1000
         self.buffer_size = 1000
         self.positive_threshold = 0.5
-        self.negative_threshold = 0.49
+        self.negative_threshold = 0.5
         self.select_threshold = 0.5
+        self.negatives_ratio = 3
         self.learning_rate = 1e-3
         self.label_map = {'max': 0}
 
@@ -56,15 +57,8 @@ class SSDResNet50():
         return bias
 
     def _batch_norm(self, input, filter_id, is_training):
-        input_norm = tf.layers.batch_normalization(input, training=is_training)
-        """
-        batch_mean, batch_var = tf.nn.moments(input, [0])
-        input_norm  = (input - batch_mean) / tf.sqrt(batch_var + 1e-5)
-        shape = [int(input.shape[0].value), int(input.shape[1].value), int(input.shape[2].value), int(input.shape[3].value)]
-        scale = tf.get_variable('bnorm_scale' + filter_id, shape=shape, initializer=tf.ones_initializer())
-        bias = tf.get_variable('bnorm_bias' + filter_id, shape=shape, initializer=tf.zeros_initializer())
-        return scale * input_norm + bias
-        """
+        """ Apply Batch Normalization After Convolution and Before Activation """
+        input_norm = tf.contrib.layers.batch_norm(input, decay = 0.99, center=True, scale=True, is_training=is_training)
         return input_norm
 
     def _conv2d(self, input_data, shape, bias_shape, stride, filter_id, is_training, padding='SAME'):
@@ -72,8 +66,8 @@ class SSDResNet50():
         weights = self.weight_variable(shape, 'weights' + filter_id)
         bias = self.bias_variable(bias_shape, 'bias' + filter_id)
         output_conv = tf.nn.conv2d(input_data, weights, strides=stride, padding='SAME')
-        # output_conv_norm = self._batch_norm(output_conv + bias, filter_id, is_training)      
-        return tf.nn.relu(output_conv + bias)
+        output_conv_norm = self._batch_norm(output_conv + bias, filter_id, is_training)      
+        return tf.nn.relu(output_conv_norm)
 
     def _fcl(self, input_data, shape, bias_shape, filter_id, classification_layer=False):
         """ Run a Fully Connected Layer and ReLU if necessary """
@@ -168,7 +162,7 @@ class SSDResNet50():
 
         return class_predictions, loc_predictions
 
-    def loss_function(self, gt_localizations, gt_classes, overall_predictions, overall_anchors, ratio_negatives=5):
+    def loss_function(self, gt_localizations, gt_classes, overall_predictions, overall_anchors, ratio_negatives=3):
         """ Define the loss function for SSD - Classification + Localization """
         overall_loss = 0
         positive_loss = 0
@@ -206,16 +200,13 @@ class SSDResNet50():
                 loss_classification_pos = tf.div(positives_only_loss, self.batch_size)
 
             with tf.name_scope('cross_entropy_neg{}'.format(index)):
-                loss_neg = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=target_labels_flattened)
-                if num_pos_samples == 0:
-                    num_hard_negatives = tf.cast(10 * ratio_negatives, tf.int32)
-                else:
-                    num_hard_negatives = tf.cast(num_pos_samples * ratio_negatives, tf.int32)
+                loss_neg = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predictions_flattened, labels=tf.cast(pos_samples_flattened, tf.int64))
+                num_hard_negatives = tf.cast(num_pos_samples * ratio_negatives, tf.int32) + self.batch_size
                 _, indices_hnm = tf.nn.top_k(loss_neg * neg_samples_flattened, num_hard_negatives, name='hard_negative_mining')
                 negatives_only_loss = tf.reduce_sum(tf.gather(loss_neg, indices_hnm))
                 loss_classification_neg = tf.div(negatives_only_loss, self.batch_size)
                 loss_classification_neg = tf.Print(loss_classification_neg, [loss_classification_neg], "-> Negatives Loss")
-
+                
             with tf.name_scope('localization{}'.format(index)):
                 weights = tf.expand_dims(1.0 * tf.to_float(tf.reshape(pos_samples, [self.batch_size, self.feat_shapes[index][0],
                 self.feat_shapes[index][1], len(self.anchor_sizes[index]) * (len(self.anchor_ratios[index]) + 1)])), axis=-1)
@@ -227,6 +218,7 @@ class SSDResNet50():
             positive_loss += (loss_classification_pos / (tf.cast(num_pos_samples, tf.float32) + 1e-8))
             negative_loss += (loss_classification_neg / (tf.cast(num_pos_samples, tf.float32) + 1e-8))
             loc_loss += (loss_localization / (tf.cast(num_pos_samples, tf.float32) + 1e-8))
+
         return overall_loss, positive_loss, negative_loss, loc_loss
 
 # Construct the Graph
@@ -261,7 +253,7 @@ for index, layer in enumerate(net.feature_layers):
 # Construct the Loss Function and Define Optimizer
 gt_classes = [tf.placeholder(tf.int64, [None]) for _ in range(net.batch_size)]
 gt_bboxes = [tf.placeholder(tf.float32, [None, 4]) for _ in range(net.batch_size)]
-total_loss, positives_loss, negatives_loss, localization_loss = net.loss_function(gt_bboxes, gt_classes, overall_predictions, overall_anchors)
+total_loss, positives_loss, negatives_loss, localization_loss = net.loss_function(gt_bboxes, gt_classes, overall_predictions, overall_anchors, net.negatives_ratio)
 optimizer = tf.train.AdamOptimizer(net.learning_rate)
 update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 with tf.control_dependencies(update_ops):
@@ -282,12 +274,12 @@ tf.summary.image("Ground Truth Bounding Boxes", tf_image_overlaid_gt, max_output
 merged = tf.summary.merge_all()
 
 # Execute the graph
-img_names = glob.glob('{}/{}'.format('./prepare_dataset/train_chips_xiew/small_set', '*.jpeg'))
+img_names = glob.glob('{}/{}'.format('./prepare_dataset', '*.jpeg'))
 img_names = np.array(img_names)
 np.random.shuffle(img_names)
 with tf.Session() as sess:
-    train_writer = tf.summary.FileWriter('./train_wo_bn', sess.graph)
-    test_writer = tf.summary.FileWriter('./test_wo_bn', sess.graph)
+    train_writer = tf.summary.FileWriter('./train', sess.graph)
+    test_writer = tf.summary.FileWriter('./test', sess.graph)
     sess.run(tf.global_variables_initializer())
     for epoch_id in range(0, net.number_iterations):
         for iteration_id in range(len(img_names)):
@@ -297,8 +289,8 @@ with tf.Session() as sess:
                 print(error)
                 continue
             summary, _, loss_value = sess.run([merged, train_op, total_loss], feed_dict={is_training: True, x_train: img_tensor, gt_bboxes[0]: gt_bbox_tensor[0], gt_classes[0]: gt_class_tensor[0], gt_bboxes[1]: gt_bbox_tensor[1], gt_classes[1]: gt_class_tensor[1], gt_bboxes[2]: gt_bbox_tensor[2], gt_classes[2]: gt_class_tensor[2], gt_bboxes[3]: gt_bbox_tensor[3], gt_classes[3]: gt_class_tensor[3], gt_bboxes[4]: gt_bbox_tensor[4], gt_classes[4]: gt_class_tensor[4], gt_bboxes[5]: gt_bbox_tensor[5], gt_classes[5]: gt_class_tensor[5], gt_bboxes[6]: gt_bbox_tensor[6], gt_classes[6]: gt_class_tensor[6], gt_bboxes[7]: gt_bbox_tensor[7], gt_classes[7]: gt_class_tensor[7]})
-            print("Loss at iteration {} {} : {}".format(epoch_id, iteration_id, loss_value))    
-            train_writer.add_summary(summary, (epoch_id * len(img_names)) + iteration_id)
-       
-        summary, loss_value = sess.run([merged, total_loss], feed_dict={is_training: False, x_train: img_tensor, gt_bboxes[0]: gt_bbox_tensor[0], gt_classes[0]: gt_class_tensor[0], gt_bboxes[1]: gt_bbox_tensor[1], gt_classes[1]: gt_class_tensor[1], gt_bboxes[2]: gt_bbox_tensor[2], gt_classes[2]: gt_class_tensor[2], gt_bboxes[3]: gt_bbox_tensor[3], gt_classes[3]: gt_class_tensor[3], gt_bboxes[4]: gt_bbox_tensor[4], gt_classes[4]: gt_class_tensor[4], gt_bboxes[5]: gt_bbox_tensor[5], gt_classes[5]: gt_class_tensor[5], gt_bboxes[6]: gt_bbox_tensor[6], gt_classes[6]: gt_class_tensor[6], gt_bboxes[7]: gt_bbox_tensor[7], gt_classes[7]: gt_class_tensor[7]})
-        test_writer.add_summary(summary, (epoch_id * len(img_names)) + iteration_id)
+            train_writer.add_summary(summary, epoch_id * len(img_names) + iteration_id))
+            print("Loss at iteration {} {} : {}".format(epoch_id, iteration_id, loss_value))
+               
+            summary, loss_value = sess.run([merged, total_loss], feed_dict={is_training: False, x_train: img_tensor, gt_bboxes[0]: gt_bbox_tensor[0], gt_classes[0]: gt_class_tensor[0], gt_bboxes[1]: gt_bbox_tensor[1], gt_classes[1]: gt_class_tensor[1], gt_bboxes[2]: gt_bbox_tensor[2], gt_classes[2]: gt_class_tensor[2], gt_bboxes[3]: gt_bbox_tensor[3], gt_classes[3]: gt_class_tensor[3], gt_bboxes[4]: gt_bbox_tensor[4], gt_classes[4]: gt_class_tensor[4], gt_bboxes[5]: gt_bbox_tensor[5], gt_classes[5]: gt_class_tensor[5], gt_bboxes[6]: gt_bbox_tensor[6], gt_classes[6]: gt_class_tensor[6], gt_bboxes[7]: gt_bbox_tensor[7], gt_classes[7]: gt_class_tensor[7]})
+            test_writer.add_summary(summary, epoch_id * len(img_names) + iteration_id))
