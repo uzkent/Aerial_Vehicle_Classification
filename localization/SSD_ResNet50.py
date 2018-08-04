@@ -11,11 +11,11 @@ class SSDResNet50():
 
     def __init__(self):
         """ Constructor for the SSD-ResNet50 Model """
-        self.number_classes = 2 # +1 for background class
+        self.number_classes = 9 # +1 for background class
         self.number_iterations = 1000
-        self.anchor_sizes = [(30., 45.),
-                      (60., 75.),
-                      (90., 105.)]
+        self.anchor_sizes = [(15., 30.),
+                      (45., 60.),
+                      (75., 90.)]
         self.anchor_ratios = [[2, .5, 3., 1./3.],
                         [2, .5, 3., 1./3.],
                         [2, .5, 3., 1./3.]]
@@ -58,7 +58,7 @@ class SSDResNet50():
 
     def _batch_norm(self, input, filter_id, is_training):
         """ Apply Batch Normalization After Convolution and Before Activation """
-        input_norm = tf.contrib.layers.batch_norm(input, decay = 0.99, center=True, scale=True, is_training=is_training)
+        input_norm = tf.contrib.layers.batch_norm(input, decay = 0.95, center=True, scale=True, is_training=is_training)
         return input_norm
 
     def _conv2d(self, input_data, shape, bias_shape, stride, filter_id, is_training, padding='SAME'):
@@ -274,7 +274,7 @@ tf.summary.image("Ground Truth Bounding Boxes", tf_image_overlaid_gt, max_output
 merged = tf.summary.merge_all()
 
 # Execute the graph
-img_names = glob.glob('{}/{}'.format('./prepare_dataset', '*.jpeg'))
+img_names = glob.glob('{}/{}'.format('./prepare_dataset/train_chips_xview', '*.jpeg'))
 img_names = np.array(img_names)
 np.random.shuffle(img_names)
 with tf.Session() as sess:
@@ -282,15 +282,16 @@ with tf.Session() as sess:
     test_writer = tf.summary.FileWriter('./test', sess.graph)
     sess.run(tf.global_variables_initializer())
     for epoch_id in range(0, net.number_iterations):
-        for iteration_id in range(len(img_names)):
+        for iteration_id in range(0, len(img_names), net.batch_size):
             try:
                 img_tensor, gt_bbox_tensor, gt_class_tensor = utils.batch_reader(img_names, iteration_id, net.label_map, net.img_shape, net.batch_size)
             except Exception as error:
                 print(error)
                 continue
             summary, _, loss_value = sess.run([merged, train_op, total_loss], feed_dict={is_training: True, x_train: img_tensor, gt_bboxes[0]: gt_bbox_tensor[0], gt_classes[0]: gt_class_tensor[0], gt_bboxes[1]: gt_bbox_tensor[1], gt_classes[1]: gt_class_tensor[1], gt_bboxes[2]: gt_bbox_tensor[2], gt_classes[2]: gt_class_tensor[2], gt_bboxes[3]: gt_bbox_tensor[3], gt_classes[3]: gt_class_tensor[3], gt_bboxes[4]: gt_bbox_tensor[4], gt_classes[4]: gt_class_tensor[4], gt_bboxes[5]: gt_bbox_tensor[5], gt_classes[5]: gt_class_tensor[5], gt_bboxes[6]: gt_bbox_tensor[6], gt_classes[6]: gt_class_tensor[6], gt_bboxes[7]: gt_bbox_tensor[7], gt_classes[7]: gt_class_tensor[7]})
-            train_writer.add_summary(summary, epoch_id * len(img_names) + iteration_id))
-            print("Loss at iteration {} {} : {}".format(epoch_id, iteration_id, loss_value))
-               
-            summary, loss_value = sess.run([merged, total_loss], feed_dict={is_training: False, x_train: img_tensor, gt_bboxes[0]: gt_bbox_tensor[0], gt_classes[0]: gt_class_tensor[0], gt_bboxes[1]: gt_bbox_tensor[1], gt_classes[1]: gt_class_tensor[1], gt_bboxes[2]: gt_bbox_tensor[2], gt_classes[2]: gt_class_tensor[2], gt_bboxes[3]: gt_bbox_tensor[3], gt_classes[3]: gt_class_tensor[3], gt_bboxes[4]: gt_bbox_tensor[4], gt_classes[4]: gt_class_tensor[4], gt_bboxes[5]: gt_bbox_tensor[5], gt_classes[5]: gt_class_tensor[5], gt_bboxes[6]: gt_bbox_tensor[6], gt_classes[6]: gt_class_tensor[6], gt_bboxes[7]: gt_bbox_tensor[7], gt_classes[7]: gt_class_tensor[7]})
-            test_writer.add_summary(summary, epoch_id * len(img_names) + iteration_id))
+            train_writer.add_summary(summary, epoch_id * len(img_names) + iteration_id/net.batch_size)
+            print("Loss at iteration {} {} : {}".format(epoch_id, iteration_id/net.batch_size, loss_value))
+            
+            if (iteration_id % 10) == 0:   
+                summary, loss_value = sess.run([merged, total_loss], feed_dict={is_training: False, x_train: img_tensor, gt_bboxes[0]: gt_bbox_tensor[0], gt_classes[0]: gt_class_tensor[0], gt_bboxes[1]: gt_bbox_tensor[1], gt_classes[1]: gt_class_tensor[1], gt_bboxes[2]: gt_bbox_tensor[2], gt_classes[2]: gt_class_tensor[2], gt_bboxes[3]: gt_bbox_tensor[3], gt_classes[3]: gt_class_tensor[3], gt_bboxes[4]: gt_bbox_tensor[4], gt_classes[4]: gt_class_tensor[4], gt_bboxes[5]: gt_bbox_tensor[5], gt_classes[5]: gt_class_tensor[5], gt_bboxes[6]: gt_bbox_tensor[6], gt_classes[6]: gt_class_tensor[6], gt_bboxes[7]: gt_bbox_tensor[7], gt_classes[7]: gt_class_tensor[7]})
+                test_writer.add_summary(summary, epoch_id * len(img_names) + iteration_id/net.batch_size)
