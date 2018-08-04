@@ -462,7 +462,6 @@ def decode_predictions(overall_predictions, overall_anchors, num_classes, clippi
         yref, xref, href, wref = anchors
         pred_cx = predictions[1][:, :, :, :, 0] * wref * prior_scaling[1] + xref
         pred_cy = predictions[1][:, :, :, :, 1] * href * prior_scaling[0] + yref
-        # pdb.set_trace()
         pred_w = wref * tf.exp(predictions[1][:, :, :, :, 2] * prior_scaling[3])
         pred_h = href * tf.exp(predictions[1][:, :, :, :, 3] * prior_scaling[2])
 	
