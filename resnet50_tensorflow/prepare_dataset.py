@@ -22,7 +22,6 @@ def parse_function(filename, label):
 
 def dataset_iterator(full_path, filenames, arr):
     """ This function returns an iterator to the dataset """
-    # Save all the file names and labels
     file_names = []
     file_labels = []
     for index in range(len(filenames)):
