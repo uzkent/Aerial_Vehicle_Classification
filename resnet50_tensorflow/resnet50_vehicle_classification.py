@@ -60,7 +60,7 @@ class ResNet50():
         bias = self.bias_variable(bias_shape, 'bias' + filter_id)
         output_conv = tf.nn.conv2d(input_data, weights, strides=stride, padding='SAME')
         output_conv_norm = self._batch_norm(output_conv + bias, filter_id, is_training)
-        return tf.nn.relu(output_conv_norm + bias)
+        return tf.nn.relu(output_conv_norm)
 
     def _fcl(self, input_data, shape, bias_shape, filter_id, classification_layer=False):
         """ Run a Fully Connected Layer and ReLU if necessary """
