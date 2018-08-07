@@ -107,16 +107,22 @@ def main():
 
     # Read the filenames in the DIRSIG Vehicle Classification Dataset
     train_filenames = np.genfromtxt('{}/{}'.format(args.train_dir, 'train.txt'), delimiter=' ', dtype=None)
+    val_filenames = np.genfromtxt('{}/{}'.format(args.test_dir, 'val.txt'), delimiter=' ', dtype=None)
     arr = np.arange(len(train_filenames))
     np.random.shuffle(arr)
 
     # Prepare the training dataset
     file_names, file_labels = prepare_dataset.dataset_iterator(args.train_dir, train_filenames, arr)
     train_batch, train_iterator = prepare_dataset.get_data(file_names, file_labels, args.batch_size)
-    x_train = tf.placeholder(tf.float32, [args.batch_size, 56, 56, 3])
+    x_train = tf.placeholder(tf.float32, [None, 56, 56, 3])
     y_train = tf.placeholder(tf.int32, [None, 2])
     is_training = tf.placeholder(tf.bool)
     tf.summary.image("training_input_image", x_train, max_outputs=20)
+
+    # Prepare the validation dataset
+    arr = np.arange(len(val_filenames))
+    file_names, file_labels = prepare_dataset.dataset_iterator(args.test_dir, val_filenames, arr)
+    val_batch, val_iterator = prepare_dataset.get_data(file_names, file_labels, len(arr))
 
     # Build the Graph
     net = ResNet50()
@@ -159,6 +165,7 @@ def main():
         test_writer = tf.summary.FileWriter('./test', sess.graph)
         sess.run(tf.global_variables_initializer())
         sess.run(train_iterator.initializer)
+        sess.run(val_iterator.initializer)
         for epoch_number in tqdm(range(args.number_epochs)):
             summary, _, loss_value = sess.run([merged, train_op, cross_entropy], feed_dict={is_training : True, x_train: train_batch[0].eval(session=sess),
             y_train: train_batch[1].eval(session=sess)})
@@ -168,7 +175,7 @@ def main():
             # Run the model on the test data for validation
             if epoch_number % args.test_frequency == 0:
                 summary, acc = sess.run([merged, accuracy], feed_dict={is_training : False,
-                x_train:train_batch[0].eval(session=sess), y_train: train_batch[1].eval(session=sess)})
+                x_train: val_batch[0].eval(session=sess), y_train: val_batch[1].eval(session=sess)})
                 print("Accuracy at iteration {} : {}".format(epoch_number, acc))
                 test_writer.add_summary(summary, epoch_number)
 
