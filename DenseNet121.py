@@ -10,32 +10,17 @@ from io import StringIO
 import io
 
 from tqdm import tqdm
-from prepare_dataset import dataset_iterator, parse_function
+import prepare_dataset
 
-# Input category
-CATEGORY = ['military','cathedral','park','museum','cave','forest','camp',
-           'hospital','road','library','mosque','university','bay','institute',
-           'river','nature reserve','church','company','airport','stadium','bank',
-           'power station','ambassador','populated place','waterfall','lake','bridge',
-           'prison','mountain','school','college','valley','hotel','infrastructure',
-           'building', 'wind farm','skyscraper']
+
+CATEGORY = ['park', 'forest','camp', 'hospital', 'road', 'university', 'bay','river', 'company', 'airport', 'stadium','power station', 'populated place', 'waterfall', 'lake', 'school', 'college', 'valley', 'hotel', 'building']
+
 
 def build_index():
     dictionary = {}
     for index in range(len(CATEGORY)):
         dictionary[CATEGORY[index]]=index
     return dictionary
-
-
-def get_data(file_names, file_labels, batch_size):
-    """ This function returns a pointer to iterate over the batches of data """
-    train_dataset = tf.data.Dataset.from_tensor_slices((file_names, file_labels))
-    train_dataset = train_dataset.map(parse_function)
-    train_dataset = train_dataset.repeat(200)
-    train_dataset = train_dataset.shuffle(buffer_size=1000)
-    train_batched_dataset = train_dataset.batch(batch_size)
-    train_iterator = train_batched_dataset.make_initializable_iterator()
-    return train_iterator.get_next(), train_iterator
 
 
 def get_parser():
@@ -57,8 +42,10 @@ def get_parser():
                         help='Path to image folder')
     aparser.add_argument('--csv_path', type=str,
                         help='Path to csv file')
-    aparser.add_argument('--file_name', type=str,
-                           help='csv file name')
+    aparser.add_argument('--train_file_name', type=str,
+                           help='training set file name')  
+    aparser.add_argument('--val_file_name', type=str,
+                           help='validation set file name') 
     return aparser
 
 
@@ -142,12 +129,10 @@ class DenseNet121():
         out = self._batch_norm(out, conv_name_base+'_X2_bn', is_training)
         out = tf.nn.relu(out, name = relu_name_base+'_X2')
         out = self._conv2d(out, [3,3, out.get_shape().as_list()[3], filter_num], [filter_num], [1,1,1,1], conv_name_base+'X2', is_training, padding='SAME')
-
         if dropout_rate:
             out = tf.nn.dropout(out, dropout_rate)
         return out
-    
-    
+      
     
     def dense_block(self, input_data, stage, layer_num, filter_num, growth_rate, is_training, dropout_rate=None, weight_decay=1e-4, grow_filter_num=True):
         """ Build dense blocks"""
@@ -173,13 +158,13 @@ class DenseNet121():
         
         if dropout_rate:
             out = tf.nn.dropout(out, dropout_rate)
-        out = tf.nn.pool(out, window_shape=[2, 2], strides=[2,2],pooling_type='AVG', padding='VALID') 
-       
+        out = tf.nn.pool(out, window_shape=[2, 2], strides=[2,2],pooling_type='AVG', padding='VALID')    
         return out
     
     
     # Run a ResNet module consisting of residual blocks 
-    def densenet121_module(self, input_data, is_training, layers_num=None, growth_rate=None):     
+    def densenet121_module(self, input_data, is_training, layers_num=None, growth_rate=None):
+        
         if not layers_num:
             layers_num = self.layers_num
         if not growth_rate:
@@ -193,7 +178,7 @@ class DenseNet121():
             else:
                 with tf.variable_scope('module' + str(index+1)):
                     out, filter_num = self.dense_block(out, index + 1, layers_num[index], filter_num, growth_rate, is_training) 
-                
+               
             if index < self.dense_block_num-1:  
                 out = self.transition_block(out, index+1, filter_num, is_training, compression=self.compression, dropout_rate=self.dropout_rate, weight_decay=self.weight_decay)
                 filter_num = int(filter_num * self.compression)
@@ -205,79 +190,84 @@ class DenseNet121():
     
 
     
-if __name__=='__main__':   
+if __name__=='__main__':    
     parser = get_parser()
-    args = parser.parse_args()    
+    args = parser.parse_args()
     
     # Prepare the training dataset
     dictionary = build_index()
-    file_names, file_labels = dataset_iterator(args.image_path, args.csv_path, args.file_name, dictionary=dictionary)
-    train_batch, train_iterator = get_data(file_names, file_labels, args.batch_size)
-   
+    file_names, file_labels = prepare_dataset.dataset_iterator(args.image_path, args.csv_path, args.train_file_name, dictionary=dictionary)
+    train_batch, train_iterator = prepare_dataset.get_data(file_names, file_labels, args.batch_size)   
+
     classes = len(dictionary)
-    x_train = tf.placeholder(tf.float32, [args.batch_size, 224, 224, 3])
+    x_train = tf.placeholder(tf.float32, [None, 224, 224, 3])
     y_train = tf.placeholder(tf.int32, [None, classes])
     is_training = tf.placeholder(tf.bool)
     tf.summary.image("training_input_image", x_train, max_outputs=20)
+
     
+    # Prepare the validation dataset
+    file_names, file_labels = prepare_dataset.dataset_iterator(args.image_path, args.csv_path, args.val_file_name, dictionary=dictionary)  
+    val_batch, val_iterator = prepare_dataset.get_data(file_names, file_labels, len(file_names))
+
     # Build the Graph
     net = DenseNet121(classes=classes)
     with tf.variable_scope("FirstStageFeature"):    
         out_1 = net._conv2d(x_train, [7,7,3,16],[16], [1, 2, 2, 1], 'convolution7x7', is_training, padding='SAME')
         #the paper uses 3*3 kernel
         out_2 = tf.nn.max_pool(value=out_1, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='VALID')
-        
+        #print(x_train,out_1,out_2)
     with tf.variable_scope("DenseNetBlocks"):
         out_3 = net.densenet121_module(out_2, is_training)
-               
+        #print(out_3)       
     with tf.variable_scope("Pooling"):
         out_4 = tf.nn.pool(out_3, window_shape=[7, 7], pooling_type='AVG', padding="VALID")
-        
+        #print(out_4)
     with tf.variable_scope("FullingConnected"):
-        out_5 = tf.reshape(out_4, [out_4.get_shape().as_list()[0], -1])        
+        #dim = tf.reduce_prod(tf.shape(out_4)[1:])
+        out_5 = tf.reshape(out_4, [-1, out_4.get_shape()[1]*out_4.get_shape()[2]*out_4.get_shape()[3]])
+        #print(out_5)
         y_pred = net._fcl(out_5, [out_5.get_shape().as_list()[-1], classes], classes, 'fc5', need_relu=False)
 
 
-    # Define the loss function and optimizer
-    cross_entropy = tf.reduce_mean(
-        tf.nn.softmax_cross_entropy_with_logits_v2(labels=y_train, logits=y_pred))
-    optimizer = tf.train.AdamOptimizer(args.learning_rate)  
-    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-    with tf.control_dependencies(update_ops):
-         train_op = optimizer.minimize(cross_entropy)
-    tf.summary.scalar('cross_entropy', cross_entropy)
+        # Define the loss function and optimizer
+        cross_entropy = tf.reduce_mean(
+            tf.nn.softmax_cross_entropy_with_logits_v2(labels=y_train, logits=y_pred))
+        optimizer = tf.train.AdamOptimizer(args.learning_rate)  
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops):
+             train_op = optimizer.minimize(cross_entropy)
+        tf.summary.scalar('cross_entropy', cross_entropy)
 
-    # Define the Classification Accuracy
-    with tf.name_scope('accuracy'):
-        correct_prediction = tf.equal(tf.argmax(y_pred,1), tf.argmax(y_train,1))
-        accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-    tf.summary.scalar('accuracy', accuracy)
+        # Define the Classification Accuracy
+        with tf.name_scope('accuracy'):
+            correct_prediction = tf.equal(tf.argmax(y_pred,1), tf.argmax(y_train,1))
+            accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+        tf.summary.scalar('accuracy', accuracy)
+        # Merge all visualized parameters
+        merged = tf.summary.merge_all()
 
-    # Merge all visualized parameters
-    merged = tf.summary.merge_all()
 
-    
     # Execute the graph
     with tf.Session() as sess:
+        print('begin session')
         train_writer = tf.summary.FileWriter('./train', sess.graph)
         test_writer = tf.summary.FileWriter('./test', sess.graph)
-        sess.run(tf.global_variables_initializer())
-        
+              
         sess.run(tf.global_variables_initializer())
         sess.run(train_iterator.initializer)
+        sess.run(val_iterator.initializer)
         for epoch_number in tqdm(range(args.number_epochs)):
-            summary, _, loss_value = sess.run([merged, train_op, cross_entropy], feed_dict={is_training: True, x_train: train_batch[0].eval(session=sess),
-            y_train: train_batch[1].eval(session=sess)})
+            summary, _, loss_value = sess.run([merged, train_op, cross_entropy], feed_dict={is_training: True, x_train: train_batch[0].eval(session=sess), y_train: tf.reshape(train_batch[1], [-1, train_batch[1].get_shape().as_list()[-1]]).eval(session=sess)})              
             train_writer.add_summary(summary, epoch_number)
             print("Loss at iteration {} : {}".format(epoch_number, loss_value))
 
             # Run the model on the test data for validation
-            if epoch_number % args.test_frequency == 0:
+            if epoch_number % args.test_frequency == 0:                
                 summary, acc = sess.run([merged, accuracy], feed_dict={is_training : False,
-                x_train: val_batch[0].eval(session=sess), y_train: val_batch[1].eval(session=sess)})
+                x_train: val_batch[0].eval(session=sess), y_train: tf.reshape(val_batch[1], [-1, val_batch[1].get_shape().as_list()[-1]]).eval(session=sess)})
                 print("Accuracy at iteration {} : {}".format(epoch_number, acc))
                 test_writer.add_summary(summary, epoch_number)   
-    
     
     
     
